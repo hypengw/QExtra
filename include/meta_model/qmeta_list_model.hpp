@@ -14,6 +14,7 @@
 #include <QtCore/QAbstractItemModel>
 #include "meta_model/qmeta_model_base.hpp"
 #include "meta_model/item_trait.hpp"
+#include "meta_model/share_store.hpp"
 
 namespace meta_model
 {
@@ -22,7 +23,8 @@ enum class QMetaListStore
 {
     Vector = 0,
     VectorWithMap,
-    Map
+    Map,
+    Share
 };
 
 namespace detail
@@ -55,12 +57,26 @@ class ListImpl;
 
 class QMetaListModelBase : public QMetaModelBase<QAbstractListModel> {
     Q_OBJECT
+
+    Q_PROPERTY(bool hasMore READ hasMore WRITE setHasMore NOTIFY hasMoreChanged)
 public:
     QMetaListModelBase(QObject* parent = nullptr);
     virtual ~QMetaListModelBase();
 
     Q_INVOKABLE virtual QVariant     item(qint32 index) const                      = 0;
     Q_INVOKABLE virtual QVariantList items(qint32 offset = 0, qint32 n = -1) const = 0;
+
+    auto hasMore() const -> bool;
+    void setHasMore(bool);
+
+    bool canFetchMore(const QModelIndex&) const override;
+    void fetchMore(const QModelIndex&) override;
+
+    Q_SIGNAL void hasMoreChanged(bool);
+    Q_SIGNAL void reqFetchMore(qint32);
+
+private:
+    bool m_has_more;
 };
 
 template<typename TItem, QMetaListStore Store, typename Allocator, typename IMPL>
@@ -75,24 +91,20 @@ public:
 
     template<typename T>
         requires std::same_as<std::remove_cvref_t<T>, TItem>
-    void insert(int index, T&& item) {
-        insert(index, std::array { std::forward<T>(item) });
+    auto insert(int index, T&& item) {
+        return insert(index, std::array { std::forward<T>(item) });
     }
+
     template<typename T>
         requires std::ranges::sized_range<T>
-    // std::same_as<std::decay_t<typename T::value_type>, TItem>
-    void insert(int index, T&& range) {
+    auto insert(int index, T&& range) {
         auto size = range.size();
-        if (size < 1) return;
+        if (size < 1) return size;
+        size = crtp_impl()._insert_len(range);
         beginInsertRows({}, index, index + size - 1);
-        auto begin = std::begin(range);
-        auto end   = std::end(range);
-        if constexpr (std::same_as<decltype(begin), decltype(end)>) {
-            crtp_impl()._insert_impl(index, begin, end);
-        } else {
-            crtp_impl()._insert_impl(index, std::forward<T>(range));
-        }
+        crtp_impl()._insert_impl(index, std::forward<T>(range));
         endInsertRows();
+        return size;
     }
     void remove(int index, int size = 1) {
         if (size < 1) return;
@@ -170,7 +182,7 @@ public:
 
     QVariant item(int idx) const override {
         if ((usize)std::max(idx, 0) >= crtp_impl().size()) return {};
-        if constexpr (is_specialization_of_v<value_type, std::variant>) {
+        if constexpr (special_of<value_type, std::variant>) {
             return std::visit(
                 [](const auto& v) -> QVariant {
                     return QVariant::fromValue(v);
@@ -226,9 +238,9 @@ public:
     auto        get_allocator() const { return m_items.get_allocator(); }
 
 protected:
-    template<typename Tin>
-    void _insert_impl(usize idx, Tin beg, Tin end) {
-        m_items.insert(begin() + idx, beg, end);
+    template<std::ranges::sized_range U>
+    auto _insert_len(U&& range) {
+        return range.size();
     }
 
     template<std::ranges::range U>
@@ -246,7 +258,7 @@ protected:
     template<std::ranges::range U>
     void _reset_impl(const U& items) {
         m_items.clear();
-        _insert_impl(0, std::begin(items), std::end(items));
+        _insert_impl(0, items);
     }
 
 private:
@@ -275,19 +287,18 @@ public:
     auto        get_allocator() const { return m_items.get_allocator(); }
 
     // hash
-    auto        contains(param_type<T> t) const { return m_map.contains(hash(t)); }
+    auto        contains(param_type<T> t) const { return m_map.contains(ItemTrait<T>::key(t)); }
     const auto& value_at(param_type<key_type> key) const { return m_items.at(m_map.at(key)); };
     auto&       value_at(param_type<key_type> key) { return m_items.at(m_map.at(key)); };
     auto        idx_at(usize hash) const -> usize { return m_map.at(hash); };
 
 protected:
-    template<typename Tin>
-    void _insert_impl(usize idx, Tin beg, Tin end) {
-        auto size = m_items.size();
-        m_items.insert(begin() + idx, beg, end);
-        for (auto i = idx; i < m_items.size(); i++) {
-            m_map.insert_or_assign(ItemTrait<T>::key(m_items.at(i)), i);
-        }
+    template<std::ranges::sized_range U>
+    auto _insert_len(U&& range) {
+        auto view = std::views::transform(range, [this](auto& el) -> usize {
+            return m_map.contains(ItemTrait<T>::key(el)) ? 0 : 1;
+        });
+        return std::accumulate(view.begin(), view.end(), 0);
     }
 
     template<std::ranges::range U>
@@ -315,18 +326,15 @@ protected:
     void _reset_impl(U&& items) {
         m_items.clear();
         m_map.clear();
-        _insert_impl(0, std::forward<U>(items).begin(), std::forward<U>(items).end());
+        _insert_impl(0, std::forward<U>(items));
     }
 
     auto& _maps() { return m_map; }
 
 private:
-    using idx_hash_type =
-        std::unordered_map<key_type, usize, std::hash<key_type>, std::equal_to<key_type>,
-                           detail::rebind_alloc<allocator_type, std::pair<const key_type, usize>>>;
     // indexed cache with hash
-    idx_hash_type  m_map;
-    container_type m_items;
+    HashMap<key_type, usize, allocator_type> m_map;
+    container_type                           m_items;
 };
 template<typename T, typename Allocator>
 class ListImpl<T, Allocator, QMetaListStore::Map> {
@@ -347,8 +355,6 @@ public:
     auto        size() const { return std::size(m_items); }
     const auto& at(usize idx) const { return value_at(m_order.at(idx)); }
     auto&       at(usize idx) { return value_at(m_order.at(idx)); }
-    // auto        find(param_type t) const { return std::find(begin(), end(), t); }
-    // auto        find(param_type t) { return std::find(begin(), end(), t); }
     auto get_allocator() const { return m_order.get_allocator(); }
 
     // hash
@@ -358,16 +364,12 @@ public:
     auto&       value_at(param_type<key_type> key) { return m_items.at(key); };
 
 protected:
-    template<typename Tin>
-    void _insert_impl(usize it, Tin beg, Tin end) {
-        std::vector<key_type, detail::rebind_alloc<allocator_type, key_type>> order(
-            get_allocator());
-        for (auto it = beg; it != end; it++) {
-            auto k = ItemTrait<T>::key(*it);
-            order.emplace_back(k);
-            m_items.insert_or_assign(k, *it);
-        }
-        m_order.insert(m_order.begin() + it, order.begin(), order.end());
+    template<std::ranges::sized_range U>
+    auto _insert_len(U&& range) {
+        auto view = std::views::transform(range, [this](auto& el) -> usize {
+            return m_items.contains(ItemTrait<T>::key(el)) ? 0 : 1;
+        });
+        return std::accumulate(view.begin(), view.end(), 0);
     }
 
     template<std::ranges::range U>
@@ -375,7 +377,7 @@ protected:
         std::vector<key_type, detail::rebind_alloc<allocator_type, key_type>> order(
             get_allocator());
         for (auto&& el : std::forward<U>(range)) {
-            auto k = hash(el);
+            auto k = ItemTrait<T>::key(el);
             order.emplace_back(k);
             m_items.insert_or_assign(k, std::forward<decltype(el)>(el));
         }
@@ -408,6 +410,111 @@ private:
     std::vector<key_type, detail::rebind_alloc<allocator_type, key_type>> m_order;
 
     container_type m_items;
+};
+
+template<typename T, typename Allocator>
+class ListImpl<T, Allocator, QMetaListStore::Share> {
+public:
+    static_assert(storeable_item<T>);
+    using allocator_type = Allocator;
+    using key_type       = ItemTrait<T>::key_type;
+    using store_type     = ItemTrait<T>::store_type;
+    using container_type =
+        std::unordered_map<key_type, T, std::hash<key_type>, std::equal_to<key_type>,
+                           detail::rebind_alloc<Allocator, std::pair<const key_type, T>>>;
+    using iterator = container_type::iterator;
+
+    ListImpl(Allocator allc = Allocator())
+        : m_order(allc),
+          m_view(std::views::transform(m_order, Trans { this })),
+          m_notify_handle(0) {}
+
+    auto begin() const { return m_view.begin(); }
+    auto end() const { return m_view.end(); }
+    auto begin() { return m_view.begin(); }
+    auto end() { return m_view.end(); }
+    auto size() const { return m_order.size(); }
+
+    const auto& at(usize idx) const { return value_at(m_order.at(idx)); }
+    auto&       at(usize idx) { return value_at(m_order.at(idx)); }
+    auto        get_allocator() const { return m_order.get_allocator(); }
+
+    // hash
+    bool        contains(param_type<T> t) const { return m_store->store_query(t) != nullptr; }
+    auto        key_at(usize idx) const { return m_order.at(idx); }
+    T*          query(param_type<key_type> key) { return m_store->store_query(key); }
+    T const*    query(param_type<key_type> key) const { return m_store->store_query(key); }
+    const auto& value_at(param_type<key_type> key) const { return *query(key); };
+    auto&       value_at(param_type<key_type> key) { return *query(key); };
+
+    void set_store(store_type store) { m_store = store; }
+
+protected:
+    template<std::ranges::sized_range U>
+    auto _insert_len(U&& range) {
+        auto view = std::views::transform(range, [this](auto& el) -> usize {
+            return m_map.contains(ItemTrait<T>::key(el)) ? 0 : 1;
+        });
+        return std::accumulate(view.begin(), view.end(), 0);
+    }
+
+    template<std::ranges::range U>
+    void _insert_impl(usize it, U&& range) {
+        std::vector<key_type, detail::rebind_alloc<allocator_type, key_type>> order(
+            get_allocator());
+        for (auto&& el : std::forward<U>(range)) {
+            auto k = ItemTrait<T>::key(el);
+            if (m_map.contains(k)) {
+                m_store->store_insert(std::forward<decltype(el)>(el), false, m_notify_handle);
+            } else {
+                m_map.insert({ k, it + order.size() });
+                order.emplace_back(k);
+                m_store->store_insert(std::forward<decltype(el)>(el), true, m_notify_handle);
+            }
+        }
+        m_order.insert(m_order.begin() + it, order.begin(), order.end());
+    }
+
+    void _erase_impl(usize index, usize last) {
+        auto it    = m_order.begin();
+        auto begin = it + index;
+        auto end   = it + last;
+        for (auto it = begin; it != end; it++) {
+            m_store->store_remove(*it);
+        }
+        m_order.erase(it + index, it + last);
+    }
+
+    void _reset_impl() {
+        for (auto& k : m_order) {
+            m_store->store_remove(k);
+        }
+        m_order.clear();
+    }
+
+    template<std::ranges::range U>
+    void _reset_impl(U&& items) {
+        for (auto& k : m_order) {
+            m_store->store_remove(k);
+        }
+        m_order.clear();
+        _insert_impl(0, std::forward<U>(items).begin(), std::forward<U>(items).end());
+    }
+
+private:
+    struct Trans {
+        ListImpl* self;
+
+        T operator()(param_type<key_type> key) { return self->value_at(key); }
+    };
+
+    std::vector<key_type, detail::rebind_alloc<allocator_type, key_type>> m_order;
+    HashMap<key_type, usize, allocator_type>                              m_map;
+
+    std::ranges::transform_view<std::ranges::ref_view<decltype(m_order)>, Trans> m_view;
+
+    std::int64_t              m_notify_handle;
+    std::optional<store_type> m_store;
 };
 
 } // namespace detail
@@ -521,7 +628,7 @@ public:
         } else if constexpr (Store == QMetaListStore::VectorWithMap) {
             for (auto& el : this->_maps()) {
                 if (auto it = key_to_idx.find(el.first); it != key_to_idx.end()) {
-                    at(el.second) = std::forward<U>(items)[it->second];
+                    this->at(el.second) = std::forward<U>(items)[it->second];
                     key_to_idx.erase(it);
                 }
             }
@@ -535,13 +642,13 @@ public:
             }
         }
 
-        // insert new
+        // append new
         idx_set_type ids(this->get_allocator());
         for (auto& el : key_to_idx) {
             ids.insert(el.second);
         }
         for (auto id : ids) {
-            this->insert(id, std::forward<U>(items)[id]);
+            this->insert(this->size(), std::forward<U>(items)[id]);
         }
         return ids.size();
     }

@@ -42,16 +42,15 @@ public:
     };
 
 private:
-    template<typename Tin>
-        requires std::convertible_to<typename std::iterator_traits<Tin>::value_type, T*>
-    void _insert_impl(std::size_t pos, Tin beg, Tin end) {
+    template<std::ranges::sized_range U>
+        requires std::convertible_to<typename std::ranges::range_value_t<U>, T*>
+    void _insert_impl(std::size_t pos, U&& range) {
         if (m_is_owner) {
-            auto it = beg;
-            for (; it < end; it++) {
-                (*it)->setParent(this);
+            for (auto&& r : range) {
+                r->setParent(this);
             }
         }
-        base_type::_insert_impl(pos, beg, end);
+        base_type::_insert_impl(pos, std::forward<U>(range));
     }
 
     bool m_is_owner;

@@ -11,7 +11,8 @@ namespace meta_model
 using i32   = std::int32_t;
 using usize = std::size_t;
 template<typename T>
-using param_type = std::conditional_t<std::is_trivially_copyable_v<T>, T, const T&>;
+using param_type =
+    std::conditional_t<std::is_trivially_copyable_v<T> && sizeof(T) <= 16, T, const T&>;
 
 template<class T, template<class...> class Primary>
 struct is_specialization_of : std::false_type {};
@@ -20,16 +21,22 @@ template<template<class...> class Primary, class... Args>
 struct is_specialization_of<Primary<Args...>, Primary> : std::true_type {};
 
 template<class T, template<class...> class Primary>
-inline constexpr bool is_specialization_of_v = is_specialization_of<T, Primary>::value;
+concept special_of = is_specialization_of<T, Primary>::value;
 
 ///
 /// @brief Trait for Item behavior
 /// @code {.cpp}
 /// // T: T or const T&
+/// // hashable:
 /// // key_type requires std::hash<> and operator==
 /// using key_type = ...;
 /// auto key(T) noexcept -> key_type;
+///
+/// // comparable:
 /// auto compare_lt(T, T) noexcept -> usize;
+///
+/// // storeable:
+/// using store_type = ...;
 /// @endcode
 /// @tparam Item type
 template<typename T>
