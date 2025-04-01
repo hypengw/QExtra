@@ -355,7 +355,7 @@ public:
     auto        size() const { return std::size(m_items); }
     const auto& at(usize idx) const { return value_at(m_order.at(idx)); }
     auto&       at(usize idx) { return value_at(m_order.at(idx)); }
-    auto get_allocator() const { return m_order.get_allocator(); }
+    auto        get_allocator() const { return m_order.get_allocator(); }
 
     // hash
     auto        contains(param_type<T> t) const { return m_items.contains(hash(t)); }
@@ -429,6 +429,8 @@ public:
           m_view(std::views::transform(m_order, Trans { this })),
           m_notify_handle(0) {}
 
+    ~ListImpl() { m_store->store_unreg_notify(m_notify_handle); }
+
     auto begin() const { return m_view.begin(); }
     auto end() const { return m_view.end(); }
     auto begin() { return m_view.begin(); }
@@ -447,7 +449,17 @@ public:
     const auto& value_at(param_type<key_type> key) const { return *query(key); };
     auto&       value_at(param_type<key_type> key) { return *query(key); };
 
-    void set_store(store_type store) { m_store = store; }
+    void set_store(store_type store) {
+        m_store         = store;
+        m_notify_handle = m_store->store_reg_notify([this](key_type key) {
+            if (auto it = m_map.find(key); it != m_map.end()) {
+                // TODO: no void*
+                auto list = static_cast<QAbstractListModel*>((void*)this);
+                auto idx  = list->index(it->second);
+                list->dataChanged(idx, idx);
+            }
+        });
+    }
 
 protected:
     template<std::ranges::sized_range U>
