@@ -14,9 +14,9 @@ template<typename TGadget, QMetaListStore Store = QMetaListStore::Vector,
 class QGadgetListModel : public QMetaListModel<TGadget, QGadgetListModel<TGadget, Store, Allocator>,
                                                Store, Allocator> {
 public:
-    QGadgetListModel(QObject* parent = nullptr)
+    QGadgetListModel(QObject* parent = nullptr, Allocator alloc = Allocator{})
         : QMetaListModel<TGadget, QGadgetListModel<TGadget, Store, Allocator>, Store, Allocator>(
-              parent) {
+              parent, alloc) {
         this->updateRoleNames(TGadget::staticMetaObject);
     }
     virtual ~QGadgetListModel() {}

@@ -12,59 +12,10 @@ public:
     int age { 18 };
 };
 
-struct StoreNotify {};
-
-struct Store {
-    struct Item {
-        Model   m;
-        int64_t count { 1 };
-    };
-    struct Inner {
-        std::unordered_map<int, Item>               map;
-        int64_t                                     serial { 0 };
-        std::map<int64_t, std::function<void(int)>> callbacks;
-    };
-    std::shared_ptr<Inner> inner;
-
-    Store(): inner(std::make_shared<Inner>()) {}
-
-    auto store_query(int k) -> Model* {
-        auto it = inner->map.find(k);
-        if (it != inner->map.end()) {
-            return std::addressof(it->second.m);
-        }
-        return nullptr;
-    }
-    auto store_query(int k) const -> Model const* {
-        auto it = inner->map.find(k);
-        if (it != inner->map.end()) {
-            return std::addressof(it->second.m);
-        }
-        return nullptr;
-    }
-    void store_insert(Model m, bool new_one, int64_t handle) {
-        if (auto it = inner->map.find(m.uid); it != inner->map.end()) {
-            it->second.m = m;
-            if (new_one) ++(it->second.count);
-        } else {
-            inner->map.insert({ m.uid, Item { m } });
-        }
-    }
-    void store_remove(int k) {
-        if (auto it = inner->map.find(k); it != inner->map.end()) {
-            auto count = --(it->second.count);
-            if (count == 0) inner->map.erase(count);
-        }
-    }
-
-    int64_t store_reg_notify(std::function<void(int)>) { return ++(inner->serial); }
-    void    store_unreg_notify(int64_t) {}
-};
-
 template<>
 struct meta_model::ItemTrait<Model> {
     using key_type   = int;
-    using store_type = Store;
+    using store_type = meta_model::ShareStore<Model>;
     static auto key(meta_model::param_type<Model> m) { return m.uid; }
 };
 
@@ -76,7 +27,8 @@ public:
 };
 
 TEST(Store, Basic) {
-    Store     store;
+    meta_model::ShareStore<Model> store;
+
     ListModel m;
     m.set_store(store);
     m.insert(0, std::array { Model { 1 }, Model { 2 } });
@@ -86,7 +38,8 @@ TEST(Store, Basic) {
 }
 
 TEST(Store, Share) {
-    Store     store;
+    meta_model::ShareStore<Model> store;
+
     ListModel m;
     ListModel n;
     m.set_store(store);

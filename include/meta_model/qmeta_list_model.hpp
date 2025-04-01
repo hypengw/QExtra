@@ -451,12 +451,14 @@ public:
 
     void set_store(store_type store) {
         m_store         = store;
-        m_notify_handle = m_store->store_reg_notify([this](key_type key) {
-            if (auto it = m_map.find(key); it != m_map.end()) {
-                // TODO: no void*
-                auto list = static_cast<QAbstractListModel*>((void*)this);
-                auto idx  = list->index(it->second);
-                list->dataChanged(idx, idx);
+        m_notify_handle = m_store->store_reg_notify([this](std::span<const key_type> keys) {
+            // TODO: no void*
+            auto list = static_cast<QAbstractListModel*>((void*)this);
+            for (auto& key : keys) {
+                if (auto it = m_map.find(key); it != m_map.end()) {
+                    auto idx = list->index(it->second);
+                    list->dataChanged(idx, idx);
+                }
             }
         });
     }
