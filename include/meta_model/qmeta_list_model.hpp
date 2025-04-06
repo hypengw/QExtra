@@ -429,7 +429,10 @@ public:
           m_view(std::views::transform(m_order, Trans { this })),
           m_notify_handle(0) {}
 
-    ~ListImpl() { m_store->store_unreg_notify(m_notify_handle); }
+    ~ListImpl() {
+        m_store->store_unreg_notify(m_notify_handle);
+        _reset_impl();
+    }
 
     auto begin() const { return m_view.begin(); }
     auto end() const { return m_view.end(); }
@@ -449,11 +452,13 @@ public:
     const auto& value_at(param_type<key_type> key) const { return *query(key); };
     auto&       value_at(param_type<key_type> key) { return *query(key); };
 
-    void set_store(store_type store) {
-        m_store         = store;
-        m_notify_handle = m_store->store_reg_notify([this](std::span<const key_type> keys) {
-            // TODO: no void*
-            auto list = static_cast<QAbstractListModel*>((void*)this);
+    void set_store(QAbstractListModel* self, store_type store) {
+        m_store = store;
+
+        // TODO: no void*
+        auto list       = QPointer { self };
+        m_notify_handle = m_store->store_reg_notify([list, this](std::span<const key_type> keys) {
+            if (! list) return;
             for (auto& key : keys) {
                 if (auto it = m_map.find(key); it != m_map.end()) {
                     auto idx = list->index(it->second);
@@ -512,7 +517,7 @@ protected:
             m_store->store_remove(k);
         }
         m_order.clear();
-        _insert_impl(0, std::forward<U>(items).begin(), std::forward<U>(items).end());
+        _insert_impl(0, std::forward<U>(items));
     }
 
 private:

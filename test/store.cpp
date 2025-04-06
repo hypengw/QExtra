@@ -30,7 +30,7 @@ TEST(Store, Basic) {
     meta_model::ShareStore<Model> store;
 
     ListModel m;
-    m.set_store(store);
+    m.set_store(&m, store);
     m.insert(0, std::array { Model { 1 }, Model { 2 } });
 
     EXPECT_EQ(m.at(0).uid, 1);
@@ -42,8 +42,8 @@ TEST(Store, Share) {
 
     ListModel m;
     ListModel n;
-    m.set_store(store);
-    n.set_store(store);
+    m.set_store(&m, store);
+    n.set_store(&m, store);
     m.insert(0, std::array { Model { 1 }, Model { 2 } });
 
     EXPECT_EQ(m.at(0).age, 18);
