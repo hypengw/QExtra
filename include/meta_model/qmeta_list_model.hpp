@@ -358,10 +358,24 @@ public:
     auto        get_allocator() const { return m_order.get_allocator(); }
 
     // hash
-    auto        contains(param_type<T> t) const { return m_items.contains(hash(t)); }
+    auto  contains(param_type<T> t) const { return m_items.contains(ItemTrait<T>::key(t)); }
+    usize idx_at(param_type<key_type> key) const {
+        if (auto it = std::find(m_order.begin(), m_order.end(), key); it != m_order.end()) {
+            return std::distance(m_order.begin(), it);
+        }
+        return -1;
+    };
     auto        key_at(usize idx) const { return m_order.at(idx); }
     const auto& value_at(param_type<key_type> key) const { return m_items.at(key); };
     auto&       value_at(param_type<key_type> key) { return m_items.at(key); };
+    T*          query(param_type<key_type> key) {
+        if (auto it = m_items.find(key); it != m_items.end()) return std::addressof(it->second);
+        return nullptr;
+    }
+    T const* query(param_type<key_type> key) const {
+        if (auto it = m_items.find(key); it != m_items.end()) return std::addressof(it->second);
+        return nullptr;
+    }
 
 protected:
     template<std::ranges::sized_range U>
@@ -403,7 +417,7 @@ protected:
     void _reset_impl(U&& items) {
         m_order.clear();
         m_items.clear();
-        _insert_impl(0, std::forward<U>(items).begin(), std::forward<U>(items).end());
+        _insert_impl(0, std::forward<U>(items));
     }
 
 private:
@@ -508,6 +522,7 @@ protected:
         for (auto& k : m_order) {
             m_store->store_remove(k);
         }
+        m_map.clear();
         m_order.clear();
     }
 
@@ -516,6 +531,7 @@ protected:
         for (auto& k : m_order) {
             m_store->store_remove(k);
         }
+        m_map.clear();
         m_order.clear();
         _insert_impl(0, std::forward<U>(items));
     }
@@ -573,6 +589,10 @@ public:
         for (decltype(items.size()) i = 0; i < items.size(); ++i) {
             key_to_idx.insert({ ItemTrait<TItem>::key(items[i]), i });
         }
+        auto changed = [this](int row) {
+            auto idx = this->index(row);
+            this->dataChanged(idx, idx);
+        };
 
         // update and remove
         if constexpr (Store == QMetaListStore::Vector) {
@@ -580,6 +600,7 @@ public:
                 auto key = ItemTrait<TItem>::key(this->at(i));
                 if (auto it = key_to_idx.find(key); it != key_to_idx.end()) {
                     this->at(i) = std::forward<U>(items)[it->second];
+                    changed(it->second);
                     key_to_idx.erase(it);
                     ++i;
                 } else {
@@ -590,6 +611,7 @@ public:
             for (auto& el : this->_maps()) {
                 if (auto it = key_to_idx.find(el.first); it != key_to_idx.end()) {
                     at(el.second) = std::forward<U>(items)[it->second];
+                    changed(it->second);
                     key_to_idx.erase(it);
                 } else {
                     this->remove(el.second);
@@ -600,6 +622,7 @@ public:
                 auto h = this->key_at(i);
                 if (auto it = key_to_idx.find(h); it != key_to_idx.end()) {
                     this->at(i) = std::forward<U>(items)[it->second];
+                    changed(it->second);
                     key_to_idx.erase(it);
                     ++i;
                 } else {

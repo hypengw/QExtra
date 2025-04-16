@@ -46,10 +46,12 @@ class StoreItem {
     template<typename, typename Allocator, typename TItemExtend, typename InnerCustom>
     friend struct ShareStore;
 
-    StoreItem(Store s, key_type k): m_store(s), m_key(k) {}
+    StoreItem(Store s, key_type k): m_store(s), m_key(k) { Q_ASSERT(m_key); }
 
 public:
     StoreItem() = delete;
+    StoreItem(Store s): m_store(s) {}
+
     StoreItem(const StoreItem& o): m_store(o.m_store), m_key(o.m_key) {
         if (m_key) m_store.store_increase(*m_key);
     }
@@ -81,6 +83,7 @@ public:
     operator bool() const { return store_query() != nullptr; }
 
     auto key() const { return m_key; }
+    auto store() const { return m_store; }
 
 private:
     auto store_query() const -> T* {
@@ -100,6 +103,7 @@ struct ShareStore {
     using key_type        = typename ItemTrait<T>::key_type;
     using callback_type   = std::function<void(std::span<const key_type>)>;
     using store_item_type = StoreItem<T, ShareStore>;
+    using item_type       = T;
 
     template<typename U>
     using rebind_alloc = typename std::allocator_traits<Allocator>::template rebind_alloc<U>;
@@ -128,15 +132,15 @@ struct ShareStore {
         auto decrease() noexcept { return --count; }
     };
 
-    using item_type = std::conditional_t<std::same_as<void, TItemExtend>, _Item, _ItemEx>;
+    using inner_item_type = std::conditional_t<std::same_as<void, TItemExtend>, _Item, _ItemEx>;
 
     struct Inner {
         Inner(Allocator alloc)
             : map(alloc), callbacks(alloc), serial(0), event(new QObject { nullptr }) {}
         ~Inner() { delete event; }
 
-        std::unordered_map<key_type, item_type, std::hash<key_type>, std::equal_to<key_type>,
-                           rebind_alloc<std::pair<const key_type, item_type>>>
+        std::unordered_map<key_type, inner_item_type, std::hash<key_type>, std::equal_to<key_type>,
+                           rebind_alloc<std::pair<const key_type, inner_item_type>>>
             map;
         std::map<handle_type, callback_type, std::less<>,
                  rebind_alloc<std::pair<const handle_type, callback_type>>>
@@ -173,7 +177,8 @@ struct ShareStore {
         }
         return nullptr;
     }
-    auto store_insert(param_type<T> item, bool new_one, handle_type handle) -> store_item_type {
+    auto store_insert(param_type<T> item, bool new_one = false, handle_type handle = 0)
+        -> store_item_type {
         std::vector<key_type, rebind_alloc<key_type>> changed;
         auto                                          key = ItemTrait<T>::key(item);
         if (auto it = inner->map.find(key); it != inner->map.end()) {
@@ -187,7 +192,7 @@ struct ShareStore {
 
             changed.emplace_back(key);
         } else {
-            inner->map.insert(std::pair { key, item_type { item, 2 } });
+            inner->map.insert(std::pair { key, inner_item_type { item, 2 } });
         }
 
         if (! changed.empty()) {
