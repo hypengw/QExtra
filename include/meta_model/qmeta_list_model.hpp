@@ -180,6 +180,29 @@ public:
         }
     }
 
+    bool moveRows(const QModelIndex& sourceParent, int sourceRow, int count,
+                  const QModelIndex& destinationParent, int destinationRow) override {
+        if (count < 1 || sourceRow < 0 || destinationRow < 0) return false;
+        if (sourceRow + count >= rowCount() || destinationRow >= rowCount()) return false;
+
+        beginMoveRows(
+            sourceParent, sourceRow, sourceRow + count, destinationParent, destinationRow);
+        crtp_impl()._move_impl(sourceRow, destinationRow, count);
+        endMoveRows();
+        return true;
+    }
+
+    bool move(int sourceRow, int count, int destinationRow) {
+        if (count < 1 || sourceRow < 0 || destinationRow < 0) return false;
+        if (sourceRow + count >= rowCount() || destinationRow >= rowCount()) return false;
+
+        auto parent = this->index(0);
+        beginMoveRows(parent, sourceRow, sourceRow + count, parent, destinationRow);
+        crtp_impl()._move_impl(sourceRow, destinationRow, count);
+        endMoveRows();
+        return true;
+    }
+
     QVariant item(int idx) const override {
         if ((usize)std::max(idx, 0) >= crtp_impl().size()) return {};
         if constexpr (special_of<value_type, std::variant>) {
@@ -261,6 +284,13 @@ protected:
         _insert_impl(0, items);
     }
 
+    void _move_impl(usize sourceRow, usize destinationRow, usize count) {
+        auto it  = m_items.begin();
+        auto src = it + sourceRow;
+        auto dst = it + destinationRow;
+        std::rotate(dst, src, src + count);
+    }
+
 private:
     container_type m_items;
 };
@@ -287,10 +317,23 @@ public:
     auto        get_allocator() const { return m_items.get_allocator(); }
 
     // hash
-    auto        contains(param_type<T> t) const { return m_map.contains(ItemTrait<T>::key(t)); }
-    const auto& value_at(param_type<key_type> key) const { return m_items.at(m_map.at(key)); };
-    auto&       value_at(param_type<key_type> key) { return m_items.at(m_map.at(key)); };
-    auto        idx_at(usize hash) const -> usize { return m_map.at(hash); };
+    auto contains(param_type<T> t) const { return m_map.contains(ItemTrait<T>::key(t)); }
+    auto query_idx(param_type<key_type> key) const -> std::optional<usize> {
+        if (auto it = m_map.find(key); it != m_map.end()) {
+            return it->second;
+        }
+        return std::nullopt;
+    };
+    T* query(param_type<key_type> key) {
+        auto idx = this->query_idx(key);
+        if (idx) return this->at(*idx);
+        return nullptr;
+    }
+    T const* query(param_type<key_type> key) const {
+        auto idx = this->query_idx(key);
+        if (idx) return this->at(*idx);
+        return nullptr;
+    }
 
 protected:
     template<std::ranges::sized_range U>
@@ -329,6 +372,13 @@ protected:
         _insert_impl(0, std::forward<U>(items));
     }
 
+    void _move_impl(usize sourceRow, usize destinationRow, usize count) {
+        auto it  = m_items.begin();
+        auto src = it + sourceRow;
+        auto dst = it + destinationRow;
+        std::rotate(dst, src, src + count);
+    }
+
     auto& _maps() { return m_map; }
 
 private:
@@ -353,22 +403,22 @@ public:
     auto        begin() { return std::begin(m_items); }
     auto        end() { return std::end(m_items); }
     auto        size() const { return std::size(m_items); }
-    const auto& at(usize idx) const { return value_at(m_order.at(idx)); }
-    auto&       at(usize idx) { return value_at(m_order.at(idx)); }
+    const auto& at(usize idx) const { return *query(m_order.at(idx)); }
+    auto&       at(usize idx) { return *query(m_order.at(idx)); }
     auto        get_allocator() const { return m_order.get_allocator(); }
 
     // hash
-    auto  contains(param_type<T> t) const { return m_items.contains(ItemTrait<T>::key(t)); }
-    usize idx_at(param_type<key_type> key) const {
+    auto contains(param_type<T> t) const { return m_items.contains(ItemTrait<T>::key(t)); }
+    auto key_at(usize idx) const { return m_order.at(idx); }
+
+    auto query_idx(param_type<key_type> key) const -> std::optional<usize> {
         if (auto it = std::find(m_order.begin(), m_order.end(), key); it != m_order.end()) {
             return std::distance(m_order.begin(), it);
         }
-        return -1;
+        return std::nullopt;
     };
-    auto        key_at(usize idx) const { return m_order.at(idx); }
-    const auto& value_at(param_type<key_type> key) const { return m_items.at(key); };
-    auto&       value_at(param_type<key_type> key) { return m_items.at(key); };
-    T*          query(param_type<key_type> key) {
+
+    T* query(param_type<key_type> key) {
         if (auto it = m_items.find(key); it != m_items.end()) return std::addressof(it->second);
         return nullptr;
     }
@@ -420,10 +470,16 @@ protected:
         _insert_impl(0, std::forward<U>(items));
     }
 
+    void _move_impl(usize sourceRow, usize destinationRow, usize count) {
+        auto it  = m_order.begin();
+        auto src = it + sourceRow;
+        auto dst = it + destinationRow;
+        std::rotate(dst, src, src + count);
+    }
+
 private:
     std::vector<key_type, detail::rebind_alloc<allocator_type, key_type>> m_order;
-
-    container_type m_items;
+    container_type                                                        m_items;
 };
 
 template<typename T, typename Allocator>
@@ -454,17 +510,20 @@ public:
     auto end() { return m_view.end(); }
     auto size() const { return m_order.size(); }
 
-    const auto& at(usize idx) const { return value_at(m_order.at(idx)); }
-    auto&       at(usize idx) { return value_at(m_order.at(idx)); }
+    const auto& at(usize idx) const { return *query(m_order.at(idx)); }
+    auto&       at(usize idx) { return *query(m_order.at(idx)); }
     auto        get_allocator() const { return m_order.get_allocator(); }
 
     // hash
-    bool        contains(param_type<T> t) const { return m_store->store_query(t) != nullptr; }
-    auto        key_at(usize idx) const { return m_order.at(idx); }
-    T*          query(param_type<key_type> key) { return m_store->store_query(key); }
-    T const*    query(param_type<key_type> key) const { return m_store->store_query(key); }
-    const auto& value_at(param_type<key_type> key) const { return *query(key); };
-    auto&       value_at(param_type<key_type> key) { return *query(key); };
+    bool contains(param_type<T> t) const { return m_map.contains(ItemTrait<T>::key(t)); }
+    auto key_at(usize idx) const { return m_order.at(idx); }
+
+    auto query_idx(param_type<key_type> key) const -> std::optional<usize> {
+        if (auto it = m_map.find(key); it != m_map.end()) return it->second;
+        return std::nullopt;
+    }
+    T*       query(param_type<key_type> key) { return m_store->store_query(key); }
+    T const* query(param_type<key_type> key) const { return m_store->store_query(key); }
 
     void set_store(QAbstractListModel* self, store_type store) {
         m_store = store;
@@ -513,6 +572,7 @@ protected:
         auto begin = it + index;
         auto end   = it + last;
         for (auto it = begin; it != end; it++) {
+            m_map.erase(*it);
             m_store->store_remove(*it);
         }
         m_order.erase(it + index, it + last);
@@ -536,11 +596,18 @@ protected:
         _insert_impl(0, std::forward<U>(items));
     }
 
+    void _move_impl(usize sourceRow, usize destinationRow, usize count) {
+        auto it  = m_order.begin();
+        auto src = it + sourceRow;
+        auto dst = it + destinationRow;
+        std::rotate(dst, src, src + count);
+    }
+
 private:
     struct Trans {
         ListImpl* self;
 
-        T operator()(param_type<key_type> key) { return self->value_at(key); }
+        T operator()(param_type<key_type> key) { return *(self->query(key)); }
     };
 
     std::vector<key_type, detail::rebind_alloc<allocator_type, key_type>> m_order;
@@ -607,37 +674,34 @@ public:
                     this->remove(i);
                 }
             }
-        } else if constexpr (Store == QMetaListStore::VectorWithMap) {
-            for (auto& el : this->_maps()) {
-                if (auto it = key_to_idx.find(el.first); it != key_to_idx.end()) {
-                    at(el.second) = std::forward<U>(items)[it->second];
-                    changed(it->second);
-                    key_to_idx.erase(it);
+        } else if constexpr (Store == QMetaListStore::Map || Store == QMetaListStore::Share ||
+                             Store == QMetaListStore::VectorWithMap) {
+            auto item_size = (usize)items.size();
+            for (usize i = 0; i < item_size; i++) {
+                auto key = ItemTrait<TItem>::key(items[i]);
+                if (i < this->size()) {
+                    auto cur_key = this->key_at(i);
+                    if (key == cur_key) {
+                        // do update
+                        this->at(i) = std::forward<U>(items)[i];
+                        changed(i);
+                    } else {
+                        if (auto idx = this->query_idx(key)) {
+                            // do move
+                            this->move(*idx, 1, i);
+                            this->at(i) = std::forward<U>(items)[i];
+                            changed(i);
+                        } else {
+                            // do remove and insert
+                            this->remove(i);
+                            this->insert(i, std::forward<U>(items)[i]);
+                        }
+                    }
                 } else {
-                    this->remove(el.second);
+                    // do and insert
+                    this->insert(i, std::forward<U>(items)[i]);
                 }
             }
-        } else if constexpr (Store == QMetaListStore::Map) {
-            for (usize i = 0; i < this->size();) {
-                auto h = this->key_at(i);
-                if (auto it = key_to_idx.find(h); it != key_to_idx.end()) {
-                    this->at(i) = std::forward<U>(items)[it->second];
-                    changed(it->second);
-                    key_to_idx.erase(it);
-                    ++i;
-                } else {
-                    this->remove(i);
-                }
-            }
-        }
-
-        // insert new
-        idx_set_type ids(this->get_allocator());
-        for (auto& el : key_to_idx) {
-            ids.insert(el.second);
-        }
-        for (auto id : ids) {
-            this->insert(id, std::forward<U>(items)[id]);
         }
     }
 
@@ -657,6 +721,10 @@ public:
         for (decltype(items.size()) i = 0; i < items.size(); ++i) {
             key_to_idx.insert({ ItemTrait<TItem>::key(items[i]), i });
         }
+        auto changed = [this](int row) {
+            auto idx = this->index(row);
+            this->dataChanged(idx, idx);
+        };
 
         // update
         if constexpr (Store == QMetaListStore::Vector) {
@@ -664,6 +732,7 @@ public:
                 auto key = ItemTrait<TItem>::key(this->at(i));
                 if (auto it = key_to_idx.find(key); it != key_to_idx.end()) {
                     this->at(i) = std::forward<U>(items)[it->second];
+                    changed(i);
                     key_to_idx.erase(it);
                 }
             }
@@ -671,14 +740,16 @@ public:
             for (auto& el : this->_maps()) {
                 if (auto it = key_to_idx.find(el.first); it != key_to_idx.end()) {
                     this->at(el.second) = std::forward<U>(items)[it->second];
+                    changed(el.second);
                     key_to_idx.erase(it);
                 }
             }
-        } else if constexpr (Store == QMetaListStore::Map) {
+        } else if constexpr (Store == QMetaListStore::Map || Store == QMetaListStore::Share) {
             for (usize i = 0; i < this->size(); ++i) {
                 auto h = this->key_at(i);
                 if (auto it = key_to_idx.find(h); it != key_to_idx.end()) {
                     this->at(i) = std::forward<U>(items)[it->second];
+                    changed(i);
                     key_to_idx.erase(it);
                 }
             }
