@@ -63,8 +63,9 @@ public:
     QMetaListModelBase(QObject* parent = nullptr);
     virtual ~QMetaListModelBase();
 
-    Q_INVOKABLE virtual QVariant     item(qint32 index) const                      = 0;
-    Q_INVOKABLE virtual QVariantList items(qint32 offset = 0, qint32 n = -1) const = 0;
+    Q_INVOKABLE virtual QVariant     item(qint32 index) const                       = 0;
+    Q_INVOKABLE virtual QVariantList items(qint32 offset = 0, qint32 n = -1) const  = 0;
+    Q_INVOKABLE virtual bool         move(qint32 src, qint32 dst, qint32 count = 1) = 0;
 
     auto hasMore() const -> bool;
     void setHasMore(bool);
@@ -181,28 +182,25 @@ public:
     }
 
     bool moveRows(const QModelIndex& sourceParent, int sourceRow, int count,
-                  const QModelIndex& destinationParent, int destinationRow) override {
-        if (count < 1 || sourceRow < 0 || destinationRow < 0) return false;
-        if (destinationRow >= sourceRow && destinationRow <= sourceRow + count) return false;
-        if (sourceRow + count >= rowCount() || destinationRow >= rowCount()) return false;
+                  const QModelIndex& destinationParent, int destinationChild) override {
+        if (sourceRow < 0 || sourceRow + count - 1 >= rowCount(sourceParent) ||
+            destinationChild < 0 || destinationChild > rowCount(destinationParent) ||
+            sourceRow == destinationChild - 1 || count <= 0 || sourceParent.isValid() ||
+            destinationParent.isValid()) {
+            return false;
+        }
+        if (! beginMoveRows(
+                QModelIndex(), sourceRow, sourceRow + count - 1, QModelIndex(), destinationChild))
+            return false;
 
-        beginMoveRows(
-            sourceParent, sourceRow, sourceRow + count, destinationParent, destinationRow);
-        crtp_impl()._move_impl(sourceRow, destinationRow, count);
+        crtp_impl()._move_impl(sourceRow, destinationChild - 1, count);
         endMoveRows();
         return true;
     }
 
-    bool move(int sourceRow, int count, int destinationRow) {
-        if (count < 1 || sourceRow < 0 || destinationRow < 0) return false;
-        if (destinationRow >= sourceRow && destinationRow <= sourceRow + count) return false;
-        if (sourceRow + count > rowCount() || destinationRow >= rowCount()) return false;
-
-        auto parent = this->index(0);
-        beginMoveRows(parent, sourceRow, sourceRow + count, parent, destinationRow);
-        crtp_impl()._move_impl(sourceRow, destinationRow, count);
-        endMoveRows();
-        return true;
+    bool move(int sourceRow, int destinationRow, int count) override {
+        auto p = index(-1);
+        return moveRows(p, sourceRow, count, p, destinationRow + 1);
     }
 
     QVariant item(int idx) const override {
@@ -731,7 +729,8 @@ public:
                                 }
                             }
                             // do move
-                            Q_ASSERT(this->move(*idx, 1 + (j - 1), i));
+                            auto ok = this->move(*idx, i, 1 + (j - 1));
+                            Q_ASSERT(ok);
                             Q_ASSERT(key == this->key_at(i));
                             Q_ASSERT(cur_key == this->key_at(i + 1 + (j - 1)));
 
