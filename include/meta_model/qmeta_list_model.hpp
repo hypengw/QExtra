@@ -183,6 +183,7 @@ public:
     bool moveRows(const QModelIndex& sourceParent, int sourceRow, int count,
                   const QModelIndex& destinationParent, int destinationRow) override {
         if (count < 1 || sourceRow < 0 || destinationRow < 0) return false;
+        if (destinationRow >= sourceRow && destinationRow <= sourceRow + count) return false;
         if (sourceRow + count >= rowCount() || destinationRow >= rowCount()) return false;
 
         beginMoveRows(
@@ -194,6 +195,7 @@ public:
 
     bool move(int sourceRow, int count, int destinationRow) {
         if (count < 1 || sourceRow < 0 || destinationRow < 0) return false;
+        if (destinationRow >= sourceRow && destinationRow <= sourceRow + count) return false;
         if (sourceRow + count >= rowCount() || destinationRow >= rowCount()) return false;
 
         auto parent = this->index(0);
@@ -702,6 +704,10 @@ public:
                     // do and insert
                     this->insert(i, std::forward<U>(items)[i]);
                 }
+            }
+            if(item_size < this->size()) {
+                // do remove
+                this->remove(item_size, this->size() - item_size);
             }
         }
     }
