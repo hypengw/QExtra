@@ -680,9 +680,14 @@ public:
         using key_type     = ItemTrait<TItem>::key_type;
         using idx_map_type = detail::HashMap<key_type, usize, allocator_type>;
 
-        auto changed = [this](int row) {
+        auto changed = [this](int row, int count = 1) {
             auto idx = this->index(row);
-            this->dataChanged(idx, idx);
+            if (count > 1) {
+                auto end = this->index(row + count - 1);
+                this->dataChanged(idx, end);
+            } else {
+                this->dataChanged(idx, idx);
+            }
         };
 
         // update and remove
@@ -717,12 +722,24 @@ public:
                         changed(i);
                     } else {
                         if (auto idx = this->query_idx(key)) {
+                            // try move more
+                            usize j = 1;
+                            for (; i + j < item_size && *idx + j < this->size(); j++) {
+                                auto key = ItemTrait<TItem>::key(items[i + j]);
+                                if (key != this->key_at(*idx + j)) {
+                                    break;
+                                }
+                            }
                             // do move
-                            Q_ASSERT(this->move(*idx, 1, i));
+                            Q_ASSERT(this->move(*idx, 1 + (j - 1), i));
                             Q_ASSERT(key == this->key_at(i));
-                            Q_ASSERT(cur_key == this->key_at(i + 1));
-                            this->at(i) = std::forward<U>(items)[i];
-                            changed(i);
+                            Q_ASSERT(cur_key == this->key_at(i + 1 + (j - 1)));
+
+                            // do update
+                            for (usize k = 0; k < j; k++) {
+                                this->at(i + k) = std::forward<U>(items)[i + k];
+                            }
+                            changed(i, j);
                         } else {
                             // do remove and insert
                             this->remove(i);
