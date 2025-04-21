@@ -318,6 +318,7 @@ public:
 
     // hash
     auto contains(param_type<T> t) const { return m_map.contains(ItemTrait<T>::key(t)); }
+    auto key_at(usize idx) const { return ItemTrait<T>::key(m_items.at(idx)); }
     auto query_idx(param_type<key_type> key) const -> std::optional<usize> {
         if (auto it = m_map.find(key); it != m_map.end()) {
             return it->second;
