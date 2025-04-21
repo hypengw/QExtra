@@ -196,7 +196,7 @@ public:
     bool move(int sourceRow, int count, int destinationRow) {
         if (count < 1 || sourceRow < 0 || destinationRow < 0) return false;
         if (destinationRow >= sourceRow && destinationRow <= sourceRow + count) return false;
-        if (sourceRow + count >= rowCount() || destinationRow >= rowCount()) return false;
+        if (sourceRow + count > rowCount() || destinationRow >= rowCount()) return false;
 
         auto parent = this->index(0);
         beginMoveRows(parent, sourceRow, sourceRow + count, parent, destinationRow);
@@ -290,7 +290,11 @@ protected:
         auto it  = m_items.begin();
         auto src = it + sourceRow;
         auto dst = it + destinationRow;
-        std::rotate(dst, src, src + count);
+        if (sourceRow > destinationRow) {
+            std::rotate(dst, src, src + count);
+        } else {
+            std::rotate(src, src + count, dst);
+        }
     }
 
 private:
@@ -379,7 +383,17 @@ protected:
         auto it  = m_items.begin();
         auto src = it + sourceRow;
         auto dst = it + destinationRow;
-        std::rotate(dst, src, src + count);
+        if (sourceRow > destinationRow) {
+            std::rotate(dst, src, src + count);
+            for (auto i = destinationRow; i < sourceRow + count; i++) {
+                m_map.insert_or_assign(ItemTrait<T>::key(m_items.at(i)), i);
+            }
+        } else {
+            std::rotate(src, src + count, dst);
+            for (auto i = sourceRow; i < destinationRow; i++) {
+                m_map.insert_or_assign(ItemTrait<T>::key(m_items.at(i)), i);
+            }
+        }
     }
 
     auto& _maps() { return m_map; }
@@ -477,7 +491,11 @@ protected:
         auto it  = m_order.begin();
         auto src = it + sourceRow;
         auto dst = it + destinationRow;
-        std::rotate(dst, src, src + count);
+        if (sourceRow > destinationRow) {
+            std::rotate(dst, src, src + count);
+        } else {
+            std::rotate(src, src + count, dst);
+        }
     }
 
 private:
@@ -603,7 +621,17 @@ protected:
         auto it  = m_order.begin();
         auto src = it + sourceRow;
         auto dst = it + destinationRow;
-        std::rotate(dst, src, src + count);
+        if (sourceRow > destinationRow) {
+            std::rotate(dst, src, src + count);
+            for (auto i = destinationRow; i < sourceRow + count; i++) {
+                m_map.insert_or_assign(m_order.at(i), i);
+            }
+        } else {
+            std::rotate(src, src + count, dst);
+            for (auto i = sourceRow; i < destinationRow; i++) {
+                m_map.insert_or_assign(m_order.at(i), i);
+            }
+        }
     }
 
 private:
@@ -650,15 +678,8 @@ public:
     template<detail::syncable_list<TItem> U>
     void sync(U&& items) {
         using key_type     = ItemTrait<TItem>::key_type;
-        using idx_set_type = detail::Set<usize, allocator_type>;
         using idx_map_type = detail::HashMap<key_type, usize, allocator_type>;
 
-        // get key to idx map
-        idx_map_type key_to_idx(this->get_allocator());
-        key_to_idx.reserve(items.size());
-        for (decltype(items.size()) i = 0; i < items.size(); ++i) {
-            key_to_idx.insert({ ItemTrait<TItem>::key(items[i]), i });
-        }
         auto changed = [this](int row) {
             auto idx = this->index(row);
             this->dataChanged(idx, idx);
@@ -666,6 +687,12 @@ public:
 
         // update and remove
         if constexpr (Store == QMetaListStore::Vector) {
+            // get key to idx map
+            idx_map_type key_to_idx(this->get_allocator());
+            key_to_idx.reserve(items.size());
+            for (decltype(items.size()) i = 0; i < items.size(); ++i) {
+                key_to_idx.insert({ ItemTrait<TItem>::key(items[i]), i });
+            }
             for (usize i = 0; i < this->size();) {
                 auto key = ItemTrait<TItem>::key(this->at(i));
                 if (auto it = key_to_idx.find(key); it != key_to_idx.end()) {
@@ -691,7 +718,9 @@ public:
                     } else {
                         if (auto idx = this->query_idx(key)) {
                             // do move
-                            this->move(*idx, 1, i);
+                            Q_ASSERT(this->move(*idx, 1, i));
+                            Q_ASSERT(key == this->key_at(i));
+                            Q_ASSERT(cur_key == this->key_at(i + 1));
                             this->at(i) = std::forward<U>(items)[i];
                             changed(i);
                         } else {
@@ -705,7 +734,7 @@ public:
                     this->insert(i, std::forward<U>(items)[i]);
                 }
             }
-            if(item_size < this->size()) {
+            if (item_size < this->size()) {
                 // do remove
                 this->remove(item_size, this->size() - item_size);
             }
