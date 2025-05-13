@@ -193,14 +193,14 @@ public:
                 QModelIndex(), sourceRow, sourceRow + count - 1, QModelIndex(), destinationChild))
             return false;
 
-        crtp_impl()._move_impl(sourceRow, destinationChild - 1, count);
+        crtp_impl()._move_impl(sourceRow, destinationChild, count);
         endMoveRows();
         return true;
     }
 
     bool move(int sourceRow, int destinationRow, int count) override {
         auto p = index(-1);
-        return moveRows(p, sourceRow, count, p, destinationRow + 1);
+        return moveRows(p, sourceRow, count, p, destinationRow);
     }
 
     QVariant item(int idx) const override {
