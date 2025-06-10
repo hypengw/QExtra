@@ -179,7 +179,7 @@ struct ShareStore {
     }
     auto store_insert(param_type<T> item, bool new_one = false, handle_type handle = 0)
         -> store_item_type {
-        std::vector<key_type, rebind_alloc<key_type>> changed;
+        std::vector<key_type, rebind_alloc<key_type>> changed { get_allocator() };
         auto                                          key = ItemTrait<T>::key(item);
         if (auto it = inner->map.find(key); it != inner->map.end()) {
             it->second.item = item;
