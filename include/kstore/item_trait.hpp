@@ -5,7 +5,7 @@
 #include <utility>
 #include <system_error>
 
-namespace meta_model
+namespace kstore
 {
 
 using i32   = std::int32_t;
@@ -73,4 +73,4 @@ struct ItemTrait<T> {
     static auto compare_lt(T a, T b) noexcept -> usize { return a < b; }
 };
 
-} // namespace meta_model
+} // namespace kstore

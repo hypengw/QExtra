@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-namespace meta_model
+namespace kstore
 {
 template<typename T>
 class Rc {
@@ -50,4 +50,4 @@ private:
     };
     Inner* m_inner;
 };
-} // namespace meta_model
+} // namespace kstore

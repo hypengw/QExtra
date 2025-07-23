@@ -1,19 +1,19 @@
 #pragma once
 
 #include <variant>
-#include "meta_model/qmeta_list_model.hpp"
+#include "kstore/qt/meta_list_model.hpp"
 #include "core/helper.h"
 
-namespace meta_model
+namespace kstore
 {
 
 template<typename... Ts>
-class VariantListModel : public QMetaListModelPre<std::variant<Ts...>, VariantListModel<Ts...>> {
-    friend class QMetaListModelPre<std::variant<Ts...>, VariantListModel<Ts...>>;
+class VariantListModel : public QMetaListModelCRTP<std::variant<Ts...>, VariantListModel<Ts...>> {
+    friend class QMetaListModelCRTP<std::variant<Ts...>, VariantListModel<Ts...>>;
 
 public:
     VariantListModel(QObject* parent = nullptr)
-        : QMetaListModelPre<std::variant<Ts...>, VariantListModel<Ts...>>(parent) {}
+        : QMetaListModelCRTP<std::variant<Ts...>, VariantListModel<Ts...>>(parent) {}
     virtual ~VariantListModel() {}
 
     using value_type     = std::variant<Ts...>;
@@ -128,11 +128,11 @@ protected:
     void updateRoleNames(const QMetaObject& meta, const std::size_t i) {
         Q_EMIT this->layoutAboutToBeChanged();
         m_items = helper::make_variant<std::vector<Ts>...>(i);
-        this->QMetaListModelBase::updateRoleNames(meta);
+        this->QMetaListModel::updateRoleNames(meta);
     }
 
 private:
     container_type m_items;
 };
 
-} // namespace meta_model
+} // namespace kstore

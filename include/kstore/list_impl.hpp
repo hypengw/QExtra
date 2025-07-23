@@ -1,10 +1,5 @@
 #pragma once
 
-// workaround for QTBUG-83160
-#if defined(Q_MOC_RUN)
-#    define __cplusplus 202002
-#endif
-
 #include <ranges>
 #include <vector>
 #include <unordered_set>
@@ -12,237 +7,55 @@
 #include <set>
 
 #include <QtCore/QAbstractItemModel>
-#include "meta_model/qmeta_model_base.hpp"
-#include "meta_model/item_trait.hpp"
-#include "meta_model/share_store.hpp"
+#include "kstore/item_trait.hpp"
+#include "kstore/share_store.hpp"
 
-namespace meta_model
+namespace kstore
 {
-
-enum class QMetaListStore
+enum class ListStoreType
 {
     Vector = 0,
     VectorWithMap,
     Map,
     Share
 };
+}
 
-namespace detail
+namespace kstore::detail
 {
 
-template<typename T, QMetaListStore>
-struct allocator_helper {
-    using value_type = T;
-};
-template<typename T>
-struct allocator_helper<T, QMetaListStore::Map> {
-    using value_type = std::pair<const usize, T>;
-};
-
-template<typename T, QMetaListStore S>
-using allocator_value_type = allocator_helper<T, S>::value_type;
-
-template<typename Allocator, typename T>
-using rebind_alloc = typename std::allocator_traits<Allocator>::template rebind_alloc<T>;
-
-template<typename T, typename Allocator>
-using Set = std::set<T, std::less<>, rebind_alloc<Allocator, T>>;
-
-template<typename K, typename V, typename Allocator>
-using HashMap = std::unordered_map<K, V, std::hash<K>, std::equal_to<K>,
-                                   rebind_alloc<Allocator, std::pair<const K, V>>>;
-
-template<typename T, typename Allocator, QMetaListStore Store>
+template<typename T, typename Allocator, ListStoreType Store>
 class ListImpl;
 
-class QMetaListModelBase : public QMetaModelBase<QAbstractListModel> {
-    Q_OBJECT
-
-    Q_PROPERTY(bool hasMore READ hasMore WRITE setHasMore NOTIFY hasMoreChanged)
-public:
-    QMetaListModelBase(QObject* parent = nullptr);
-    virtual ~QMetaListModelBase();
-
-    Q_INVOKABLE virtual QVariant     item(qint32 index) const                       = 0;
-    Q_INVOKABLE virtual QVariantList items(qint32 offset = 0, qint32 n = -1) const  = 0;
-    Q_INVOKABLE virtual bool         move(qint32 src, qint32 dst, qint32 count = 1) = 0;
-
-    auto hasMore() const -> bool;
-    void setHasMore(bool);
-
-    bool canFetchMore(const QModelIndex&) const override;
-    void fetchMore(const QModelIndex&) override;
-
-    Q_SIGNAL void hasMoreChanged(bool);
-    Q_SIGNAL void reqFetchMore(qint32);
-
-private:
-    bool m_has_more;
-};
-
-template<typename TItem, QMetaListStore Store, typename Allocator, typename IMPL>
-class QMetaListModelPre : public QMetaListModelBase {
-public:
-    using value_type = TItem;
-    template<typename T>
-    using rebind_alloc = typename std::allocator_traits<Allocator>::template rebind_alloc<T>;
-
-    QMetaListModelPre(QObject* parent = nullptr): QMetaListModelBase(parent) {};
-    virtual ~QMetaListModelPre() {};
-
-    template<typename T>
-        requires std::same_as<std::remove_cvref_t<T>, TItem>
-    auto insert(int index, T&& item) {
-        return insert(index, std::array { std::forward<T>(item) });
-    }
-
-    template<typename T>
-        requires std::ranges::sized_range<T>
-    auto insert(int index, T&& range) {
-        auto size = range.size();
-        if (size < 1) return size;
-        size = crtp_impl()._insert_len(range);
-        beginInsertRows({}, index, index + size - 1);
-        crtp_impl()._insert_impl(index, std::forward<T>(range));
-        endInsertRows();
-        return size;
-    }
-    void remove(int index, int size = 1) {
-        if (size < 1) return;
-        removeRows(index, size);
-    }
-    auto removeRows(int row, int count, const QModelIndex& parent = {}) -> bool override {
-        if (count < 1) return false;
-        beginRemoveRows(parent, row, row + count - 1);
-        crtp_impl()._erase_impl(row, row + count);
-        endRemoveRows();
-        return true;
-    }
-    template<typename Func>
-    void remove_if(Func&& func) {
-        std::set<int, std::greater<>> indexes;
-        for (int i = 0; i < rowCount(); i++) {
-            auto& el = crtp_impl().at(i);
-            if (func(el)) {
-                indexes.insert(i);
-            }
-        }
-        for (auto& i : indexes) {
-            removeRow(i);
-        }
-    }
-    void replace(int row, param_type<TItem> val) {
-        auto& item = crtp_impl().at(row);
-        item       = val;
-        auto idx   = index(row);
-        dataChanged(idx, idx);
-    }
-
-    void resetModel() {
-        beginResetModel();
-        crtp_impl()._reset_impl();
-        endResetModel();
-    }
-
-    template<typename T>
-        requires std::ranges::sized_range<T>
-    void resetModel(const std::optional<T>& items) {
-        beginResetModel();
-        if (items) {
-            crtp_impl()._reset_impl(items.value());
-        } else {
-            crtp_impl()._reset_impl();
-        }
-        endResetModel();
-    }
-
-    template<typename T>
-        requires std::ranges::sized_range<T>
-    // std::same_as<std::decay_t<typename T::value_type>, TItem>
-    void resetModel(const T& items) {
-        beginResetModel();
-        crtp_impl()._reset_impl(items);
-        endResetModel();
-    }
-    template<typename T>
-        requires std::ranges::sized_range<T>
-    void replaceResetModel(const T& items) {
-        auto  size = items.size();
-        usize old  = std::max(rowCount(), 0);
-        auto  num  = std::min<int>(old, size);
-        for (auto i = 0; i < num; i++) {
-            crtp_impl().at(i) = items[i];
-        }
-        if (num > 0) dataChanged(index(0), index(num));
-        if (size > old) {
-            insert(num, std::ranges::subrange(items.begin() + num, items.end(), size - num));
-        } else if (size < old) {
-            removeRows(size, old - size);
-        }
-    }
-
-    bool moveRows(const QModelIndex& sourceParent, int sourceRow, int count,
-                  const QModelIndex& destinationParent, int destinationChild) override {
-        if (sourceRow < 0 || sourceRow + count - 1 >= rowCount(sourceParent) ||
-            destinationChild < 0 || destinationChild > rowCount(destinationParent) ||
-            sourceRow == destinationChild - 1 || count <= 0 || sourceParent.isValid() ||
-            destinationParent.isValid()) {
-            return false;
-        }
-        if (! beginMoveRows(
-                QModelIndex(), sourceRow, sourceRow + count - 1, QModelIndex(), destinationChild))
-            return false;
-
-        crtp_impl()._move_impl(sourceRow, destinationChild, count);
-        endMoveRows();
-        return true;
-    }
-
-    bool move(int sourceRow, int destinationRow, int count) override {
-        auto p = index(-1);
-        return moveRows(p, sourceRow, count, p, destinationRow);
-    }
-
-    QVariant item(int idx) const override {
-        if ((usize)std::max(idx, 0) >= crtp_impl().size()) return {};
-        if constexpr (special_of<value_type, std::variant>) {
-            return std::visit(
-                [](const auto& v) -> QVariant {
-                    return QVariant::fromValue(v);
-                },
-                crtp_impl().at(idx));
-        } else {
-            return QVariant::fromValue(crtp_impl().at(idx));
-        }
-    }
-
-    auto items(qint32 offset = 0, qint32 n = -1) const -> QVariantList override {
-        if (n == -1) n = rowCount();
-        auto view = std::views::transform(std::views::iota(offset, n), [this](qint32 idx) {
-            return item(idx);
-        });
-        return QVariantList { view.begin(), view.end() };
-    }
-
-    virtual int rowCount(const QModelIndex& = QModelIndex()) const override {
-        return crtp_impl().size();
-    }
-
-private:
-    auto&       crtp_impl() { return *static_cast<IMPL*>(this); }
-    const auto& crtp_impl() const { return *static_cast<const IMPL*>(this); }
-};
-} // namespace detail
-
-namespace detail
-{
 template<typename T, typename TItem>
 concept syncable_list =
     std::ranges::sized_range<T> &&
     std::same_as<std::remove_cvref_t<std::ranges::range_value_t<T>>, TItem> && hashable_item<TItem>;
 
+template<typename T, ListStoreType>
+struct allocator_helper {
+    using value_type = T;
+};
+template<typename T>
+struct allocator_helper<T, ListStoreType::Map> {
+    using value_type = std::pair<const usize, T>;
+};
+
+template<typename T, ListStoreType S>
+using allocator_value_type = allocator_helper<T, S>::value_type;
+
+template<typename Allocator, typename T>
+using rebind_alloc = typename std::allocator_traits<Allocator>::template rebind_alloc<T>;
+
+template<typename K, typename V, typename Allocator>
+using HashMap = std::unordered_map<K, V, std::hash<K>, std::equal_to<K>,
+                                   rebind_alloc<Allocator, std::pair<const K, V>>>;
+
 template<typename T, typename Allocator>
-class ListImpl<T, Allocator, QMetaListStore::Vector> {
+using Set = std::set<T, std::less<>, rebind_alloc<Allocator, T>>;
+
+template<typename T, typename Allocator>
+class ListImpl<T, Allocator, ListStoreType::Vector> {
 public:
     using allocator_type = Allocator;
     using container_type = std::vector<T, Allocator>;
@@ -300,7 +113,7 @@ private:
 };
 
 template<typename T, typename Allocator>
-class ListImpl<T, Allocator, QMetaListStore::VectorWithMap> {
+class ListImpl<T, Allocator, ListStoreType::VectorWithMap> {
 public:
     using allocator_type = Allocator;
     using container_type = std::vector<T, Allocator>;
@@ -402,7 +215,7 @@ private:
     container_type                           m_items;
 };
 template<typename T, typename Allocator>
-class ListImpl<T, Allocator, QMetaListStore::Map> {
+class ListImpl<T, Allocator, ListStoreType::Map> {
 public:
     using allocator_type = Allocator;
     using key_type       = ItemTrait<T>::key_type;
@@ -502,7 +315,7 @@ private:
 };
 
 template<typename T, typename Allocator>
-class ListImpl<T, Allocator, QMetaListStore::Share> {
+class ListImpl<T, Allocator, ListStoreType::Share> {
 public:
     static_assert(storeable_item<T>);
     using allocator_type = Allocator;
@@ -648,174 +461,4 @@ private:
     std::optional<store_type> m_store;
 };
 
-} // namespace detail
-
-template<typename TItem, typename CRTP, QMetaListStore Store,
-         typename Allocator = std::allocator<detail::allocator_value_type<TItem, Store>>>
-class QMetaListModel : public detail::QMetaListModelPre<TItem, Store, Allocator, CRTP>,
-                       public detail::ListImpl<TItem, Allocator, Store> {
-    friend class detail::QMetaListModelPre<TItem, Store, Allocator, CRTP>;
-    using base_type      = detail::QMetaListModelPre<TItem, Store, Allocator, CRTP>;
-    using base_impl_type = detail::ListImpl<TItem, Allocator, Store>;
-
-public:
-    using allocator_type = Allocator;
-    using container_type = base_impl_type::container_type;
-    using iterator       = container_type::iterator;
-
-    template<typename T>
-    using rebind_alloc = detail::rebind_alloc<allocator_type, T>;
-
-    QMetaListModel(QObject* parent = nullptr, Allocator allc = Allocator())
-        : base_type(parent), base_impl_type(allc) {}
-    virtual ~QMetaListModel() {}
-
-    ///
-    /// @brief sync items without reset
-    /// if mostly changed, use reset
-    template<detail::syncable_list<TItem> U>
-    void sync(U&& items) {
-        using key_type     = ItemTrait<TItem>::key_type;
-        using idx_map_type = detail::HashMap<key_type, usize, allocator_type>;
-
-        auto changed = [this](int row, int count = 1) {
-            auto idx = this->index(row);
-            if (count > 1) {
-                auto end = this->index(row + count - 1);
-                this->dataChanged(idx, end);
-            } else {
-                this->dataChanged(idx, idx);
-            }
-        };
-
-        // update and remove
-        if constexpr (Store == QMetaListStore::Vector) {
-            // get key to idx map
-            idx_map_type key_to_idx(this->get_allocator());
-            key_to_idx.reserve(items.size());
-            for (decltype(items.size()) i = 0; i < items.size(); ++i) {
-                key_to_idx.insert({ ItemTrait<TItem>::key(items[i]), i });
-            }
-            for (usize i = 0; i < this->size();) {
-                auto key = ItemTrait<TItem>::key(this->at(i));
-                if (auto it = key_to_idx.find(key); it != key_to_idx.end()) {
-                    this->at(i) = std::forward<U>(items)[it->second];
-                    changed(it->second);
-                    key_to_idx.erase(it);
-                    ++i;
-                } else {
-                    this->remove(i);
-                }
-            }
-        } else if constexpr (Store == QMetaListStore::Map || Store == QMetaListStore::Share ||
-                             Store == QMetaListStore::VectorWithMap) {
-            auto item_size = (usize)items.size();
-            for (usize i = 0; i < item_size; i++) {
-                auto key = ItemTrait<TItem>::key(items[i]);
-                if (i < this->size()) {
-                    auto cur_key = this->key_at(i);
-                    if (key == cur_key) {
-                        // do update
-                        this->at(i) = std::forward<U>(items)[i];
-                        changed(i);
-                    } else {
-                        if (auto idx = this->query_idx(key)) {
-                            // try move more
-                            usize j = 1;
-                            for (; i + j < item_size && *idx + j < this->size(); j++) {
-                                auto key = ItemTrait<TItem>::key(items[i + j]);
-                                if (key != this->key_at(*idx + j)) {
-                                    break;
-                                }
-                            }
-                            // do move
-                            auto ok = this->move(*idx, i, 1 + (j - 1));
-                            Q_ASSERT(ok);
-                            Q_ASSERT(key == this->key_at(i));
-                            Q_ASSERT(cur_key == this->key_at(i + 1 + (j - 1)));
-
-                            // do update
-                            for (usize k = 0; k < j; k++) {
-                                this->at(i + k) = std::forward<U>(items)[i + k];
-                            }
-                            changed(i, j);
-                        } else {
-                            // do remove and insert
-                            this->remove(i);
-                            this->insert(i, std::forward<U>(items)[i]);
-                        }
-                    }
-                } else {
-                    // do and insert
-                    this->insert(i, std::forward<U>(items)[i]);
-                }
-            }
-            if (item_size < this->size()) {
-                // do remove
-                this->remove(item_size, this->size() - item_size);
-            }
-        }
-    }
-
-    ///
-    /// @brief sync items without reset
-    /// if mostly changed, use reset
-    /// @return increased size
-    template<detail::syncable_list<TItem> U>
-    auto extend(U&& items) -> usize {
-        using key_type     = ItemTrait<TItem>::key_type;
-        using idx_set_type = detail::Set<usize, allocator_type>;
-        using idx_map_type = detail::HashMap<key_type, usize, allocator_type>;
-
-        // get key to idx map
-        idx_map_type key_to_idx(this->get_allocator());
-        key_to_idx.reserve(items.size());
-        for (decltype(items.size()) i = 0; i < items.size(); ++i) {
-            key_to_idx.insert({ ItemTrait<TItem>::key(items[i]), i });
-        }
-        auto changed = [this](int row) {
-            auto idx = this->index(row);
-            this->dataChanged(idx, idx);
-        };
-
-        // update
-        if constexpr (Store == QMetaListStore::Vector) {
-            for (usize i = 0; i < this->size(); ++i) {
-                auto key = ItemTrait<TItem>::key(this->at(i));
-                if (auto it = key_to_idx.find(key); it != key_to_idx.end()) {
-                    this->at(i) = std::forward<U>(items)[it->second];
-                    changed(i);
-                    key_to_idx.erase(it);
-                }
-            }
-        } else if constexpr (Store == QMetaListStore::VectorWithMap) {
-            for (auto& el : this->_maps()) {
-                if (auto it = key_to_idx.find(el.first); it != key_to_idx.end()) {
-                    this->at(el.second) = std::forward<U>(items)[it->second];
-                    changed(el.second);
-                    key_to_idx.erase(it);
-                }
-            }
-        } else if constexpr (Store == QMetaListStore::Map || Store == QMetaListStore::Share) {
-            for (usize i = 0; i < this->size(); ++i) {
-                auto h = this->key_at(i);
-                if (auto it = key_to_idx.find(h); it != key_to_idx.end()) {
-                    this->at(i) = std::forward<U>(items)[it->second];
-                    changed(i);
-                    key_to_idx.erase(it);
-                }
-            }
-        }
-
-        // append new
-        idx_set_type ids(this->get_allocator());
-        for (auto& el : key_to_idx) {
-            ids.insert(el.second);
-        }
-        for (auto id : ids) {
-            this->insert(this->size(), std::forward<U>(items)[id]);
-        }
-        return ids.size();
-    }
-};
-} // namespace meta_model
+} // namespace kstore::detail

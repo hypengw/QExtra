@@ -1,7 +1,7 @@
 #pragma once
 #include <QtCore/QAbstractProxyModel>
 
-namespace meta_model
+namespace kstore
 {
 
 class QTableProxyModel : public QAbstractProxyModel {
@@ -65,4 +65,4 @@ private:
     std::array<QMetaObject::Connection, 18> m_source_connections;
 };
 
-} // namespace meta_model
+} // namespace kstore

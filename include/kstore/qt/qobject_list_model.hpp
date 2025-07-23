@@ -2,22 +2,22 @@
 
 #include <type_traits>
 
-#include "meta_model/qgadget_helper.hpp"
-#include "meta_model/qmeta_list_model.hpp"
+#include "kstore/qt/gadget_model.hpp"
+#include "kstore/qt/meta_list_model.hpp"
 
-namespace meta_model
+namespace kstore
 {
 
 namespace detail
 {
 template<typename T>
     requires std::is_base_of_v<QObject, T>
-class QObjectListModel : public QMetaListModel<T*, QObjectListModel<T>, QMetaListStore::Vector> {
-    template<typename, QMetaListStore, typename, typename>
-    friend class detail::QMetaListModelPre;
+class QObjectListModel : public QMetaListModel<T*, QObjectListModel<T>, ListStoreType::Vector> {
+    template<typename, ListStoreType, typename, typename>
+    friend class detail::QMetaListModelCRTP;
 
 public:
-    using base_type    = QMetaListModel<T*, QObjectListModel<T>, QMetaListStore::Vector>;
+    using base_type    = QMetaListModel<T*, QObjectListModel<T>, ListStoreType::Vector>;
     QObjectListModel() = delete;
 
     template<typename U = T>
@@ -58,4 +58,4 @@ private:
 } // namespace detail
 
 using QObjectListModel = detail::QObjectListModel<QObject>;
-} // namespace meta_model
+} // namespace kstore

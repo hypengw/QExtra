@@ -1,7 +1,7 @@
 #include <format>
 #include <gtest/gtest.h>
 
-#include "meta_model/qgadget_list_model.hpp"
+#include "kstore/qt/gadget_model.hpp"
 
 struct Model {
     Q_GADGET
@@ -13,21 +13,21 @@ public:
 };
 
 template<>
-struct meta_model::ItemTrait<Model> {
+struct kstore::ItemTrait<Model> {
     using key_type   = int;
-    using store_type = meta_model::ShareStore<Model>;
-    static auto key(meta_model::param_type<Model> m) { return m.uid; }
+    using store_type = kstore::ShareStore<Model>;
+    static auto key(kstore::param_type<Model> m) { return m.uid; }
 };
 
-struct ListModel : meta_model::QGadgetListModel<Model, meta_model::QMetaListStore::Share> {
+struct ListModel : kstore::QGadgetListModel,
+                   kstore::QMetaListModelCRTP<Model, ListModel, kstore::ListStoreType::Share> {
     Q_OBJECT
 public:
-    using base_type = meta_model::QGadgetListModel<Model, meta_model::QMetaListStore::Share>;
-    ListModel(QObject* p = nullptr): base_type(p) {}
+    ListModel(QObject* p = nullptr): kstore::QGadgetListModel(this, p) {}
 };
 
 TEST(Store, Basic) {
-    meta_model::ShareStore<Model> store;
+    kstore::ShareStore<Model> store;
 
     ListModel m;
     m.set_store(&m, store);
@@ -38,7 +38,7 @@ TEST(Store, Basic) {
 }
 
 TEST(Store, Share) {
-    meta_model::ShareStore<Model> store;
+    kstore::ShareStore<Model> store;
 
     ListModel m;
     ListModel n;

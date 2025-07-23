@@ -1,9 +1,11 @@
 #pragma once
 
-#include <QtCore/QMetaProperty>
-#include <QtQml/QJSValue>
+#include <type_traits>
 
-namespace meta_model
+#include <QtCore/QMetaProperty>
+#include "kstore/qt/meta_list_model.hpp"
+
+namespace kstore
 {
 
 template<typename T>
@@ -11,6 +13,7 @@ concept cp_is_gadget = requires() { typename T::QtGadgetHelper; };
 template<typename T>
 concept cp_is_qobject = std::derived_from<T, QObject>;
 
+/*
 template<typename TGadget>
     requires cp_is_gadget<TGadget>
 TGadget toGadget(const QJSValue& js) {
@@ -32,5 +35,20 @@ TGadget toGadget(const QJSValue& js) {
     }
     return out;
 }
+*/
 auto readOnGadget(const QVariant&, const char*) -> QVariant;
-} // namespace meta_model
+
+class QGadgetListModel : public QMetaListModel {
+public:
+    QGadgetListModel(QListInterface* oper, QObject* parent = nullptr);
+
+    QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
+};
+
+// template<typename TGadget, ListStoreType Store = ListStoreType::Vector,
+//          typename Allocator = std::allocator<detail::allocator_value_type<TGadget, Store>>>
+//     requires cp_is_gadget<TGadget>
+// class QGadgetListModel : public QMetaListModel<TGadget, QGadgetListModel<TGadget, Store,
+// Allocator>,
+//                                                Store, Allocator> {
+} // namespace kstore

@@ -9,10 +9,10 @@
 #include <QtCore/QPointer>
 #include <QtCore/QMetaObject>
 
-#include "meta_model/item_trait.hpp"
-#include "meta_model/rc.hpp"
+#include "kstore/item_trait.hpp"
+#include "kstore/rc.hpp"
 
-namespace meta_model
+namespace kstore
 {
 
 ///
@@ -42,7 +42,7 @@ struct ShareStore;
 
 template<typename T, typename Store>
 class StoreItem {
-    using key_type = typename meta_model::ItemTrait<T>::key_type;
+    using key_type = typename kstore::ItemTrait<T>::key_type;
     template<typename, typename Allocator, typename TItemExtend, typename InnerCustom>
     friend struct ShareStore;
 
@@ -231,7 +231,7 @@ struct ShareStore {
     void store_unreg_notify(handle_type handle) { inner->callbacks.erase(handle); }
 
     // extend
-    auto query_extend(meta_model::param_type<key_type> key)
+    auto query_extend(kstore::param_type<key_type> key)
         -> TItemExtend* requires(! std::same_as<TItemExtend, void>) {
             auto& map = this->inner->map;
             if (auto it = map.find(key); it != map.end()) {
@@ -240,7 +240,7 @@ struct ShareStore {
             return nullptr;
         }
 
-    auto query_extend(meta_model::param_type<key_type> key) const
+    auto query_extend(kstore::param_type<key_type> key) const
         -> TItemExtend* requires(! std::same_as<TItemExtend, void>) {
             auto& map = this->inner->map;
             if (auto it = map.find(key); it != map.end()) {
@@ -254,4 +254,4 @@ struct ShareStore {
     }
 };
 
-} // namespace meta_model
+} // namespace kstore
