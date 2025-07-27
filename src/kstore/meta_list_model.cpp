@@ -25,7 +25,10 @@ void QMetaListModel::fetchMore(const QModelIndex&) {
     reqFetchMore(rowCount());
 }
 
-int QMetaListModel::rowCount(const QModelIndex&) const { return m_oper->rawSize(); }
+int QMetaListModel::rowCount(const QModelIndex& parent) const {
+    if (parent.isValid()) return 0;
+    return m_oper->rawSize();
+}
 
 QVariant QMetaListModel::item(int idx) const {
     if (std::max(idx, 0) >= rowCount()) return {};
@@ -41,8 +44,17 @@ auto QMetaListModel::items(qint32 offset, qint32 n) const -> QVariantList {
     return list;
 }
 
+bool QMetaListModel::insertRows(int row, int count, const QModelIndex& parent) {
+    if (count < 1 || row < 0 || row > rowCount(parent)) return false;
+    beginInsertRows(QModelIndex(), row, row + count - 1);
+    m_oper->rawInsert(row, QVariantList(count));
+    endInsertRows();
+    return true;
+}
+
 auto QMetaListModel::removeRows(int row, int count, const QModelIndex& parent) -> bool {
-    if (count < 1) return false;
+    if (count <= 0 || row < 0 || (row + count) > rowCount(parent)) return false;
+
     beginRemoveRows(parent, row, row + count - 1);
     m_oper->rawErase(row, row + count);
     endRemoveRows();
@@ -51,11 +63,21 @@ auto QMetaListModel::removeRows(int row, int count, const QModelIndex& parent) -
 
 bool QMetaListModel::moveRows(const QModelIndex& sourceParent, int sourceRow, int count,
                               const QModelIndex& destinationParent, int destinationChild) {
+#if 0
     if (sourceRow < 0 || sourceRow + count - 1 >= rowCount(sourceParent) || destinationChild < 0 ||
         destinationChild > rowCount(destinationParent) || sourceRow == destinationChild - 1 ||
         count <= 0 || sourceParent.isValid() || destinationParent.isValid()) {
         return false;
     }
+#else
+    if (sourceRow < 0 || sourceRow + count - 1 >= rowCount(sourceParent) || destinationChild < 0 ||
+        destinationChild > rowCount(destinationParent) || sourceRow == destinationChild ||
+        sourceRow == destinationChild - 1 || count <= 0 || sourceParent.isValid() ||
+        destinationParent.isValid()) {
+        return false;
+    }
+#endif
+
     if (! beginMoveRows(
             QModelIndex(), sourceRow, sourceRow + count - 1, QModelIndex(), destinationChild))
         return false;
@@ -63,6 +85,15 @@ bool QMetaListModel::moveRows(const QModelIndex& sourceParent, int sourceRow, in
     m_oper->rawMove(sourceRow, destinationChild, count);
     endMoveRows();
     return true;
+}
+Qt::DropActions QMetaListModel::supportedDropActions() const {
+    return QAbstractItemModel::supportedDropActions() | Qt::MoveAction;
+}
+
+Qt::ItemFlags QMetaListModel::flags(const QModelIndex& index) const {
+    if (! index.isValid()) return QAbstractListModel::flags(index) | Qt::ItemIsDropEnabled;
+    return QAbstractListModel::flags(index) | Qt::ItemIsEditable | Qt::ItemIsDragEnabled |
+           Qt::ItemIsDropEnabled;
 }
 
 auto QMetaListModel::roleNames() const -> QHash<int, QByteArray> { return this->roleNamesRef(); }

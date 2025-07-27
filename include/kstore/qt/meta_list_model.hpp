@@ -17,12 +17,13 @@ class QListInterface {
 public:
     using value_t = void*;
 
-    virtual auto rawAt(qint32 index) const -> value_t              = 0;
-    virtual auto rawToVariant(value_t) const -> QVariant           = 0;
-    virtual void rawMove(qint32 src, qint32 dst, qint32 count = 1) = 0;
-    virtual auto rawItemMeta() const -> QMetaObject const*         = 0;
-    virtual auto rawSize() const -> std::size_t                    = 0;
-    virtual void rawErase(qint32 start, qint32 end)                = 0;
+    virtual auto rawAt(qint32 index) const -> value_t               = 0;
+    virtual auto rawToVariant(value_t) const -> QVariant            = 0;
+    virtual void rawInsert(qint32 index, std::span<const QVariant>) = 0;
+    virtual void rawMove(qint32 src, qint32 dst, qint32 count = 1)  = 0;
+    virtual auto rawItemMeta() const -> QMetaObject const*          = 0;
+    virtual auto rawSize() const -> std::size_t                     = 0;
+    virtual void rawErase(qint32 start, qint32 end)                 = 0;
 };
 
 template<typename TItem, typename IMPL, ListStoreType Store = ListStoreType::Vector,
@@ -56,11 +57,17 @@ public:
 
     int rowCount(const QModelIndex& = QModelIndex()) const override;
 
-    auto removeRows(int row, int count, const QModelIndex& parent = {}) -> bool override;
+    bool insertRows(int row, int count, const QModelIndex& parent = {}) override;
+
+    bool removeRows(int row, int count, const QModelIndex& parent = {}) override;
 
     bool moveRows(const QModelIndex& sourceParent, int sourceRow, int count,
                   const QModelIndex& destinationParent, int destinationChild) override;
     auto roleNames() const -> QHash<int, QByteArray> override;
+
+    Qt::DropActions supportedDropActions() const override;
+    Qt::ItemFlags   flags(const QModelIndex& index) const override;
+
 protected:
     QListInterface* m_oper;
     bool            m_has_more;
@@ -100,6 +107,12 @@ public:
         } else {
             return QVariant::fromValue(v);
         }
+    }
+    void rawInsert(qint32 offset, std::span<const QVariant> data) override {
+        auto view = std::ranges::views::transform(data, [](const QVariant& v) {
+            return v.value<TItem>();
+        });
+        _cimpl()._insert_impl(offset, view);
     }
     void rawMove(qint32 src, qint32 dst, qint32 count = 1) override {
         _cimpl()._move_impl(src, dst, count);
