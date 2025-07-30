@@ -45,7 +45,11 @@ auto QMetaListModel::items(qint32 offset, qint32 n) const -> QVariantList {
 }
 
 bool QMetaListModel::insertRows(int row, int count, const QModelIndex& parent) {
-    if (count < 1 || row < 0 || row > rowCount(parent)) return false;
+    const auto cur_count = rowCount(parent);
+    if (row < 0) {
+        row = cur_count + (1 + row);
+    }
+    if (count < 1 || row < 0 || row > cur_count) return false;
     beginInsertRows(QModelIndex(), row, row + count - 1);
     m_oper->rawInsert(row, QVariantList(count));
     endInsertRows();
