@@ -30,10 +30,18 @@ int QMetaListModel::rowCount(const QModelIndex& parent) const {
     return m_oper->rawSize();
 }
 
-QVariant QMetaListModel::item(int idx) const {
-    if (std::max(idx, 0) >= rowCount()) return {};
+QVariant QMetaListModel::item(qint32 idx) const {
+    if (idx < 0 || idx >= rowCount()) return {};
     return m_oper->rawToVariant(m_oper->rawAt(idx));
 }
+void QMetaListModel::setItem(qint32 idx, const QVariant& data) {
+    if (idx < 0 || idx >= rowCount()) return;
+    m_oper->rawAssign(idx, data);
+
+    const auto index = this->index(idx);
+    dataChanged(index, index);
+}
+
 auto QMetaListModel::items(qint32 offset, qint32 n) const -> QVariantList {
     if (n == -1) n = rowCount();
 

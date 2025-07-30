@@ -20,4 +20,17 @@ QVariant QGadgetListModel::data(const QModelIndex& index, int role) const {
     }
     return {};
 };
+bool QGadgetListModel::setData(const QModelIndex& index, const QVariant& value, int role) {
+    const auto row = index.row();
+    if (row >= 0 && row < (qint32)m_oper->rawSize()) {
+        if (auto prop = this->propertyOfRole(role); prop) {
+            bool changed = prop.value().writeOnGadget(m_oper->rawAt(index.row()), value);
+            if (changed) {
+                dataChanged(index, index, { role });
+            }
+            return changed;
+        }
+    }
+    return false;
+}
 } // namespace kstore

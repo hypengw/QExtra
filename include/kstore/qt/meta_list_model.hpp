@@ -18,6 +18,7 @@ public:
     using value_t = void*;
 
     virtual auto rawAt(qint32 index) const -> value_t               = 0;
+    virtual void rawAssign(qint32 index, const QVariant&)           = 0;
     virtual auto rawToVariant(value_t) const -> QVariant            = 0;
     virtual void rawInsert(qint32 index, std::span<const QVariant>) = 0;
     virtual void rawMove(qint32 src, qint32 dst, qint32 count = 1)  = 0;
@@ -43,6 +44,7 @@ public:
     virtual ~QMetaListModel();
 
     Q_INVOKABLE QVariant     item(qint32 index) const;
+    Q_INVOKABLE void         setItem(qint32 index, const QVariant&);
     Q_INVOKABLE QVariantList items(qint32 offset = 0, qint32 n = -1) const;
     // Q_INVOKABLE bool move(qint32 src, qint32 dst, qint32 count = 1);
 
@@ -94,6 +96,11 @@ public:
         // safe const_cast here
         // as item in container is not const
         return const_cast<TItem*>(&(_cimpl().at(index)));
+    }
+    void rawAssign(qint32 index, const QVariant& val) override {
+        if (val.canConvert<TItem>()) {
+            _cimpl().at(index) = val.value<TItem>();
+        }
     }
     auto rawToVariant(value_t p) const -> QVariant override {
         if (p == nullptr) return {};
