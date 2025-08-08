@@ -6,11 +6,8 @@ namespace kstore
 {
 
 QMetaListModel::QMetaListModel(QListInterface* oper, QObject* parent)
-    : QAbstractListModel(parent), m_oper(oper), m_has_more(false) {
-    if (auto meta = oper->rawItemMeta()) {
-        updateRoleNames(*meta, this);
-    }
-}
+    : QAbstractListModel(parent), m_oper(oper), m_has_more(false) {}
+
 QMetaListModel::~QMetaListModel() {}
 auto QMetaListModel::hasMore() const -> bool { return m_has_more; }
 void QMetaListModel::setHasMore(bool v) {
