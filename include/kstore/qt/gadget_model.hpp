@@ -20,6 +20,7 @@ public:
     template<typename T>
     QGadgetListModel(T* oper, QObject* parent = nullptr)
         : QGadgetListModel(static_cast<QListInterface*>(oper), parent) {
+        // must use static member func here, as virtual ptr is not inited here
         if (auto meta = oper->T::rawItemMeta()) {
             updateRoleNames(*meta, this);
         }
