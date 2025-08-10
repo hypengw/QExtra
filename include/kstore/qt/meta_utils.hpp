@@ -6,7 +6,7 @@
 namespace kstore
 {
 
-auto qvariant_to_josn(const QVariant&) -> QJsonDocument;
-auto qvariant_from_josn(const QJsonDocument&) -> QVariant;
+auto qvariant_to_josn(const QVariant&) -> QJsonValue;
+auto qvariant_from_josn(const QJsonValue&) -> QVariant;
 
 } // namespace kstore
