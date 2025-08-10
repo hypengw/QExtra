@@ -89,12 +89,11 @@ auto kstore::qvariant_to_josn(const QVariant& variant) -> QJsonValue {
         else if (type.flags() & QMetaType::IsGadget) {
             return qgadget_to_json(variant);
         }
-        // try QString
-        else if (variant.canConvert<QString>()) {
-            return variant.toString();
-        }
         // try sequential iterable
         else if (variant.canConvert<QSequentialIterable>()) {
+            if (variant.canConvert<QString>()) {
+                return variant.toString();
+            }
             auto arr  = QJsonArray();
             auto view = variant.value<QSequentialIterable>();
             for (const auto& item : view) {
