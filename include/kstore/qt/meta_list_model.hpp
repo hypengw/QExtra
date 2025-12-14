@@ -83,8 +83,6 @@ public:
     template<typename T>
     using rebind_alloc = detail::rebind_alloc<allocator_type, T>;
     using value_type   = TItem;
-    template<typename T>
-    using rebind_alloc = typename std::allocator_traits<Allocator>::template rebind_alloc<T>;
 
     QMetaListModelCRTP(Allocator allc = Allocator()): list_impl_t(allc) {};
     QMetaListModelCRTP(const QMetaListModelCRTP&) = delete;
@@ -206,9 +204,9 @@ public:
     template<typename T>
         requires std::ranges::sized_range<T>
     void replaceResetModel(const T& items) {
-        auto  size = items.size();
-        usize old  = std::max(_cimpl().size(), 0);
-        auto  num  = std::min<int>(old, size);
+        const auto  size = items.size();
+        const usize old  = std::max(_cimpl().size(), 0);
+        const auto  num  = std::min<int>(old, size);
         for (auto i = 0; i < num; i++) {
             _cimpl().at(i) = items[i];
         }
@@ -256,7 +254,7 @@ public:
                 auto key = ItemTrait<TItem>::key(self->at(i));
                 if (auto it = key_to_idx.find(key); it != key_to_idx.end()) {
                     self->at(i) = std::forward<U>(items)[it->second];
-                    changed(it->second);
+                    changed(i);
                     key_to_idx.erase(it);
                     ++i;
                 } else {

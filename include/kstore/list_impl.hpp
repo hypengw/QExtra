@@ -7,6 +7,7 @@
 #include <set>
 
 #include <QtCore/QAbstractItemModel>
+#include <QtCore/QPointer>
 #include "kstore/item_trait.hpp"
 #include "kstore/share_store.hpp"
 
@@ -386,17 +387,22 @@ protected:
     void _insert_impl(usize it, U&& range) {
         std::vector<key_type, detail::rebind_alloc<allocator_type, key_type>> order(
             get_allocator());
+        std::vector<key_type, detail::rebind_alloc<allocator_type, key_type>> keys(get_allocator());
         for (auto&& el : std::forward<U>(range)) {
             auto k = ItemTrait<T>::key(el);
+            keys.emplace_back(k);
             if (m_map.contains(k)) {
-                m_store->store_insert(std::forward<decltype(el)>(el), false, m_notify_handle);
+                m_store->store_insert(std::forward<decltype(el)>(el));
             } else {
                 m_map.insert({ k, it + order.size() });
                 order.emplace_back(k);
-                m_store->store_insert(std::forward<decltype(el)>(el), true, m_notify_handle);
+                auto [item, _] = m_store->store_insert(std::forward<decltype(el)>(el));
+                // mark as keeped in struct
+                item.increase();
             }
         }
         m_order.insert(m_order.begin() + it, order.begin(), order.end());
+        m_store->store_changed_callback(keys, m_notify_handle);
     }
 
     void _erase_impl(usize index, usize last) {

@@ -5,10 +5,6 @@
 #include <map>
 #include <memory>
 
-#include <QtCore/QObject>
-#include <QtCore/QPointer>
-#include <QtCore/QMetaObject>
-
 #include "kstore/item_trait.hpp"
 #include "kstore/rc.hpp"
 
@@ -21,7 +17,7 @@ template<typename T, typename TItem>
 concept storeable =
     requires(T t, TItem item, typename ItemTrait<TItem>::key_type key, std::int64_t handle) {
         { t.store_query(key) } -> std::same_as<TItem*>;
-        t.store_insert(item, true, handle);
+        t.store_insert(item);
         t.store_remove(key);
         {
             t.store_reg_notify([](std::span<const decltype(key)>) {
@@ -52,14 +48,12 @@ public:
     StoreItem() = delete;
     StoreItem(Store s): m_store(s) {}
 
-    StoreItem(const StoreItem& o): m_store(o.m_store), m_key(o.m_key) {
-        if (m_key) m_store.store_increase(*m_key);
-    }
+    StoreItem(const StoreItem& o): m_store(o.m_store), m_key(o.m_key) { increase(); }
     StoreItem(StoreItem&& o) noexcept: m_store(o.m_store), m_key(o.m_key) { o.m_key = {}; }
     StoreItem& operator=(const StoreItem& o) {
         m_store = o.m_store;
         m_key   = o.m_key;
-        if (m_key) m_store.store_increase(*m_key);
+        increase();
         return *this;
     }
     StoreItem& operator=(StoreItem&& o) noexcept {
@@ -84,6 +78,11 @@ public:
 
     auto key() const { return m_key; }
     auto store() const { return m_store; }
+
+    // increase ref count, careful to call this
+    auto increase() {
+        if (m_key) m_store.store_increase(*m_key);
+    }
 
 private:
     auto store_query() const -> T* {
@@ -135,9 +134,8 @@ struct ShareStore {
     using inner_item_type = std::conditional_t<std::same_as<void, TItemExtend>, _Item, _ItemEx>;
 
     struct Inner {
-        Inner(Allocator alloc)
-            : map(alloc), callbacks(alloc), serial(0), event(new QObject { nullptr }) {}
-        ~Inner() { delete event; }
+        Inner(Allocator alloc): map(alloc), callbacks(alloc), serial(0) {}
+        ~Inner() {}
 
         std::unordered_map<key_type, inner_item_type, std::hash<key_type>, std::equal_to<key_type>,
                            rebind_alloc<std::pair<const key_type, inner_item_type>>>
@@ -146,20 +144,8 @@ struct ShareStore {
                  rebind_alloc<std::pair<const handle_type, callback_type>>>
                     callbacks;
         handle_type serial;
-        QObject*    event;
 
         InnerCustom custom;
-
-        template<typename U>
-        void delay_callback(handle_type req_handle, U&& range) {
-            QMetaObject::invokeMethod(event, [this, req_handle, range, p = QPointer(event)] {
-                if (! p) return;
-                for (auto& el : callbacks) {
-                    if (el.first == req_handle) continue;
-                    el.second(range);
-                }
-            });
-        }
     };
 
     Rc<Inner> inner;
@@ -177,29 +163,29 @@ struct ShareStore {
         }
         return nullptr;
     }
-    auto store_insert(param_type<T> item, bool new_one = false, handle_type handle = 0)
-        -> store_item_type {
-        std::vector<key_type, rebind_alloc<key_type>> changed { get_allocator() };
-        auto                                          key = ItemTrait<T>::key(item);
+
+    template<typename Range>
+    void store_changed_callback(const Range& range, std::int64_t ignore_handle = 0) {
+        for (auto& el : inner->callbacks) {
+            if (el.first == ignore_handle) continue;
+            el.second(range);
+        }
+    }
+
+    auto store_insert(param_type<T> item) -> std::pair<store_item_type, bool> {
+        bool changed { false };
+        auto key = ItemTrait<T>::key(item);
         if (auto it = inner->map.find(key); it != inner->map.end()) {
             it->second.item = item;
             // for store item
             it->second.increase();
 
-            if (new_one) {
-                it->second.increase();
-            }
-
-            changed.emplace_back(key);
+            changed = true;
         } else {
             inner->map.insert(std::pair { key, inner_item_type { item, 2 } });
         }
 
-        if (! changed.empty()) {
-            inner->delay_callback(handle, std::move(changed));
-        }
-
-        return { *this, key };
+        return { { *this, key }, changed };
     }
 
     auto store_item(param_type<key_type> k) -> std::optional<store_item_type> {
