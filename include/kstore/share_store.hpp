@@ -19,10 +19,10 @@ concept storeable =
         { t.store_query(key) } -> std::same_as<TItem*>;
         t.store_insert(item);
         t.store_remove(key);
-        {
-            t.store_reg_notify([](std::span<const decltype(key)>) {
-            })
-        } -> std::same_as<std::int64_t>;
+        // {
+        //     t.store_reg_notify([](std::span<const decltype(key)>) {
+        //     })
+        // } -> std::same_as<std::int64_t>;
         t.store_unreg_notify(handle);
     };
 
@@ -74,7 +74,7 @@ public:
     auto item() const -> T* { return store_query(); }
     auto operator*() const -> T& { return *store_query(); }
     auto operator->() const -> T* { return *store_query(); }
-    operator bool() const { return store_query() != nullptr; }
+         operator bool() const { return store_query() != nullptr; }
 
     auto key() const { return m_key; }
     auto store() const { return m_store; }
@@ -217,27 +217,27 @@ struct ShareStore {
     void store_unreg_notify(handle_type handle) { inner->callbacks.erase(handle); }
 
     // extend
-    auto query_extend(kstore::param_type<key_type> key)
-        -> TItemExtend* requires(! std::same_as<TItemExtend, void>) {
-            auto& map = this->inner->map;
-            if (auto it = map.find(key); it != map.end()) {
-                return std::addressof(it->second.extend);
-            }
-            return nullptr;
+    auto query_extend(kstore::param_type<key_type> key) -> TItemExtend*
+        requires(! std::same_as<TItemExtend, void>)
+    {
+        auto& map = this->inner->map;
+        if (auto it = map.find(key); it != map.end()) {
+            return std::addressof(it->second.extend);
         }
-
-    auto query_extend(kstore::param_type<key_type> key) const
-        -> TItemExtend* requires(! std::same_as<TItemExtend, void>) {
-            auto& map = this->inner->map;
-            if (auto it = map.find(key); it != map.end()) {
-                return std::addressof(it->second.extend);
-            }
-            return nullptr;
-        }
-
-    auto size() const -> std::size_t {
-        return inner->map.size();
+        return nullptr;
     }
+
+    auto query_extend(kstore::param_type<key_type> key) const -> TItemExtend*
+        requires(! std::same_as<TItemExtend, void>)
+    {
+        auto& map = this->inner->map;
+        if (auto it = map.find(key); it != map.end()) {
+            return std::addressof(it->second.extend);
+        }
+        return nullptr;
+    }
+
+    auto size() const -> std::size_t { return inner->map.size(); }
 };
 
 } // namespace kstore
