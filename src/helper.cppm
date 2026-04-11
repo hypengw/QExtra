@@ -1,7 +1,8 @@
 module;
 #include <qtversionchecks.h>
-export module qcm.qt:helper;
-export import qcm.helper;
+export module qextra:helper;
+// export import qcm.helper;
+export import rstd.cppstd;
 export import qt;
 
 using namespace Qt::StringLiterals;
@@ -47,6 +48,7 @@ inline bool is_numeric_metatype_id(int id) {
 inline bool is_numeric_metatype(QMetaType type) { return is_numeric_metatype_id(type.id()); }
 } // namespace helper
 
+/*
 template<typename T, typename F>
     requires cppstd::ranges::range<F> && convertable<T, cppstd::ranges::range_value_t<F>>
 struct Convert<QList<T>, F> {
@@ -110,6 +112,29 @@ struct Convert<cppstd::string, QAnyStringView> {
     }
 };
 
+
+template<typename T>
+struct Convert<cppstd::optional<T>, QVariant> {
+    using out_type = cppstd::optional<T>;
+    using in_type  = QVariant;
+    static void from(out_type& o, const in_type& in) {
+        o = in.canConvert<T>() ? out_type(in.value<T>()) : cppstd::nullopt;
+    }
+};
+
+template<typename T>
+struct Convert<QVariant, cppstd::optional<T>> {
+    using out_type = QVariant;
+    using in_type  = cppstd::optional<T>;
+    static void from(out_type& o, const in_type& in) {
+        if (in) {
+            o = out_type::fromValue(in.value());
+        }
+    }
+};
+
+*/
+
 template<>
 struct rstd::Impl<rstd::fmt::Display, QString> : rstd::ImplBase<QString> {
     auto fmt(rstd::fmt::Formatter& f) const -> bool {
@@ -144,9 +169,11 @@ struct rstd::Impl<rstd::fmt::Display, QUtf8StringView> : rstd::ImplBase<QUtf8Str
 template<>
 struct rstd::Impl<rstd::fmt::Display, QAnyStringView> : rstd::ImplBase<QAnyStringView> {
     auto fmt(rstd::fmt::Formatter& f) const -> bool {
-        cppstd::string out;
-        Convert<cppstd::string, QAnyStringView>::from(out, this->self());
-        return f.write_raw((const u8*)out.data(), out.size());
+        bool out;
+        this->self().visit([&f, &out](auto v) {
+            out = rstd::as<rstd::fmt::Display>(v).fmt(f);
+        });
+        return out;
     }
 };
 
@@ -183,23 +210,3 @@ export inline std::strong_ordering operator<=>(const QString& a, const QString& 
                  : (a == b ? std::strong_ordering::equal : std::strong_ordering::greater);
 }
 #endif
-
-template<typename T>
-struct Convert<cppstd::optional<T>, QVariant> {
-    using out_type = cppstd::optional<T>;
-    using in_type  = QVariant;
-    static void from(out_type& o, const in_type& in) {
-        o = in.canConvert<T>() ? out_type(in.value<T>()) : cppstd::nullopt;
-    }
-};
-
-template<typename T>
-struct Convert<QVariant, cppstd::optional<T>> {
-    using out_type = QVariant;
-    using in_type  = cppstd::optional<T>;
-    static void from(out_type& o, const in_type& in) {
-        if (in) {
-            o = out_type::fromValue(in.value());
-        }
-    }
-};

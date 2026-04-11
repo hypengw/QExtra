@@ -1,4 +1,4 @@
-export module qcm.qt;
+export module qextra;
 export import :asio;
 export import :kstore;
 export import :helper;

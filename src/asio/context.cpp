@@ -1,4 +1,4 @@
-module qcm.qt;
+module qextra;
 import :asio.context;
 import :asio.executor;
 

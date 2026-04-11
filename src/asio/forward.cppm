@@ -1,4 +1,4 @@
-export module qcm.qt:asio.forward;
+export module qextra:asio.forward;
 
 export class QtExecutionContext;
 export class QtExecutor;

@@ -4,7 +4,7 @@ module;
 #include "kstore/share_store.hpp"
 #include "kstore/qt/meta_utils.hpp"
 #include "kstore/qt/qtable_proxy_model.hpp"
-export module qcm.qt:kstore;
+export module qextra:kstore;
 
 export namespace kstore
 {

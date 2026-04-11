@@ -1,12 +1,9 @@
 module;
-#include <asio/execution/blocking.hpp>
-#include <asio/execution/outstanding_work.hpp>
-#include <asio/execution/relationship.hpp>
 #include <rstd/macro.hpp>
 
-export module qcm.qt:asio.executor;
+export module qextra:asio.executor;
 export import :asio.context;
-export import qcm.core;
+export import rstd;
 
 using rstd::sync::Arc;
 
@@ -31,17 +28,17 @@ public:
     QtExecutionContext& query(asio::execution::context_t) const noexcept { return *m_ctx; }
 
     static constexpr asio::execution::blocking_t query(asio::execution::blocking_t) noexcept {
-        return asio::execution::blocking.never;
+        return asio::execution::blocking_().never;
     }
 
     static constexpr asio::execution::relationship_t
     query(asio::execution::relationship_t) noexcept {
-        return asio::execution::relationship.fork;
+        return asio::execution::relationship_().fork;
     }
 
     static constexpr asio::execution::outstanding_work_t
     query(asio::execution::outstanding_work_t) noexcept {
-        return asio::execution::outstanding_work.tracked;
+        return asio::execution::outstanding_work_().tracked;
     }
 
     template<typename F>

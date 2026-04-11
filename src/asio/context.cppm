@@ -1,7 +1,6 @@
-export module qcm.qt:asio.context;
+export module qextra:asio.context;
 export import :asio.forward;
-export import qcm.core;
-export import qcm.asio;
+export import ncrequest;
 export import qt;
 
 using rstd::boxed::Box;
@@ -31,7 +30,7 @@ struct QtExecutionEventRunner : QObject {
     auto         event(QEvent* event) -> bool override;
 };
 
-export class QtExecutionContext : public asio::execution_context, NoCopy {
+export class QtExecutionContext : public asio::execution_context {
 public:
     QtExecutionContext(QObject*, QEvent::Type);
     QtExecutionContext(QThread*, QEvent::Type);

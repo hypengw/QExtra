@@ -1,4 +1,4 @@
-export module qcm.qt:qobject_bindable_property_p;
+export module qextra:qobject_bindable_property_p;
 export import qcm.core;
 export import qt;
 

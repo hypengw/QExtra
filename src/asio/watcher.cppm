@@ -1,4 +1,4 @@
-export module qcm.qt:asio.watcher;
+export module qextra:asio.watcher;
 export import :asio.executor;
 
 using rstd::sync::atomic::Atomic;
@@ -10,7 +10,7 @@ public:
     QWatcher(T* t): QWatcher() {
         if (t != nullptr) {
             auto thread = t->thread();
-            m_ptr       = rc<helper>(new helper(t, thread), [](helper* h) {
+            m_ptr       = cppstd::shared_ptr<helper>(new helper(t, thread), [](helper* h) {
                 if (QThread::isMainThread() && QThread::currentThread() == h->thread) {
                     auto exec = QThread::currentThread()->property("exec");
                     if (! exec.isNull() && ! exec.value<bool>()) {
@@ -60,7 +60,7 @@ public:
 private:
     struct helper : QObject {
         Atomic<T*> pointer;
-        QThread*        thread;
+        QThread*   thread;
         helper(T* p, QThread* t): pointer(p), thread(t) {
             connect(
                 p,
@@ -73,5 +73,5 @@ private:
         }
     };
 
-    rc<helper> m_ptr;
+    cppstd::shared_ptr<helper> m_ptr;
 };
