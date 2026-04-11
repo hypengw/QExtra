@@ -18,11 +18,11 @@ auto readOnGadget(const QVariant&, const char*) -> QVariant;
 class QGadgetListModel : public QMetaListModel {
 public:
     template<typename T>
-    QGadgetListModel(T* oper, QObject* parent = nullptr)
+    QGadgetListModel(T* oper, QObject* parent = nullptr, int opts = 0)
         : QGadgetListModel(static_cast<QListInterface*>(oper), parent) {
         // must use static member func here, as virtual ptr is not inited here
         if (auto meta = oper->T::rawItemMeta()) {
-            updateRoleNames(*meta, this);
+            updateRoleNames(*meta, this, opts);
         }
     }
     explicit QGadgetListModel(QListInterface* oper, QObject* parent = nullptr);

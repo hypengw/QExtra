@@ -18,6 +18,22 @@ QVariant QGadgetListModel::data(const QModelIndex& index, int role) const {
     if (auto prop = this->propertyOfRole(role); prop) {
         return prop.value().readOnGadget(m_oper->rawAt(index.row()));
     }
+
+    if (this->options() & kstore::QMetaRoleNames::WithMethod) {
+        if (auto method = this->methodOfRole(role); method) {
+            auto ret_type = method->returnMetaType();
+            auto ret_data = ret_type.create();
+
+            QTemplatedMetaMethodReturnArgument<void> ret_arg = {
+                { .metaType = ret_type.iface(), .name = nullptr, .data = ret_data }
+            };
+
+            method.value().invokeOnGadget(m_oper->rawAt(index.row()), ret_arg);
+            QVariant ret { ret_type, ret_data };
+            ret_type.destroy(ret_data);
+            return ret;
+        }
+    }
     return {};
 };
 bool QGadgetListModel::setData(const QModelIndex& index, const QVariant& value, int role) {
