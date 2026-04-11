@@ -208,6 +208,20 @@ protected:
         }
     }
 
+    template<std::ranges::sized_range R>
+    void _reorder_impl(const R& new_order) {
+        container_type tmp(get_allocator());
+        tmp.reserve(std::ranges::size(new_order));
+        for (auto& key : new_order) {
+            tmp.push_back(std::move(m_items[m_map[key]]));
+        }
+        m_items = std::move(tmp);
+        m_map.clear();
+        for (usize i = 0; i < m_items.size(); i++) {
+            m_map.insert_or_assign(ItemTrait<T>::key(m_items[i]), i);
+        }
+    }
+
     auto& _maps() { return m_map; }
 
 private:
@@ -308,6 +322,11 @@ protected:
         } else {
             std::rotate(src, src + count, dst);
         }
+    }
+
+    template<std::ranges::sized_range R>
+    void _reorder_impl(const R& new_order) {
+        m_order.assign(std::ranges::begin(new_order), std::ranges::end(new_order));
     }
 
 private:
@@ -448,6 +467,15 @@ protected:
             for (auto i = sourceRow; i < destinationRow; i++) {
                 m_map.insert_or_assign(m_order.at(i), i);
             }
+        }
+    }
+
+    template<std::ranges::sized_range R>
+    void _reorder_impl(const R& new_order) {
+        m_order.assign(std::ranges::begin(new_order), std::ranges::end(new_order));
+        m_map.clear();
+        for (usize i = 0; i < m_order.size(); i++) {
+            m_map.insert_or_assign(m_order[i], i);
         }
     }
 

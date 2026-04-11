@@ -233,16 +233,12 @@ public:
         auto self          = &_cimpl();
 
         auto changed = [self](int row, int count = 1) {
-            auto idx = self->index(row);
-            if (count > 1) {
-                auto end = self->index(row + count - 1);
-                self->dataChanged(idx, end);
-            } else {
-                self->dataChanged(idx, idx);
-            }
+            if (count < 1) return;
+            auto first = self->index(row);
+            auto last  = count > 1 ? self->index(row + count - 1) : first;
+            self->dataChanged(first, last);
         };
 
-        // update and remove
         if constexpr (Store == ListStoreType::Vector) {
             // get key to idx map
             idx_map_type key_to_idx(self->get_allocator());
@@ -250,63 +246,161 @@ public:
             for (decltype(items.size()) i = 0; i < items.size(); ++i) {
                 key_to_idx.insert({ ItemTrait<TItem>::key(items[i]), i });
             }
-            for (usize i = 0; i < self->size();) {
+
+            // update existing, collect removals
+            std::vector<usize> to_remove;
+            for (usize i = 0; i < self->size(); i++) {
                 auto key = ItemTrait<TItem>::key(self->at(i));
                 if (auto it = key_to_idx.find(key); it != key_to_idx.end()) {
                     self->at(i) = std::forward<U>(items)[it->second];
-                    changed(i);
                     key_to_idx.erase(it);
-                    ++i;
                 } else {
-                    self->remove(i);
+                    to_remove.push_back(i);
                 }
             }
+
+            // batch remove back to front
+            for (auto it = to_remove.rbegin(); it != to_remove.rend();) {
+                usize last  = *it;
+                usize first = last;
+                ++it;
+                while (it != to_remove.rend() && *it == first - 1) {
+                    first = *it;
+                    ++it;
+                }
+                self->remove(first, last - first + 1);
+            }
+
+            if (self->size() > 0) changed(0, self->size());
         } else if constexpr (Store == ListStoreType::Map || Store == ListStoreType::Share ||
                              Store == ListStoreType::VectorWithMap) {
             auto item_size = (usize)items.size();
-            for (usize i = 0; i < item_size; i++) {
-                auto key = ItemTrait<TItem>::key(items[i]);
-                if (i < self->size()) {
-                    auto cur_key = self->key_at(i);
-                    if (key == cur_key) {
-                        // do update
-                        self->at(i) = std::forward<U>(items)[i];
-                        changed(i);
-                    } else {
-                        if (auto idx = self->query_idx(key)) {
-                            // try move more
-                            usize j = 1;
-                            for (; i + j < item_size && *idx + j < self->size(); j++) {
-                                auto key = ItemTrait<TItem>::key(items[i + j]);
-                                if (key != self->key_at(*idx + j)) {
-                                    break;
-                                }
-                            }
-                            // do move
-                            auto ok = self->move(*idx, i, 1 + (j - 1));
-                            Q_ASSERT(ok);
-                            Q_ASSERT(key == self->key_at(i));
-                            Q_ASSERT(cur_key == self->key_at(i + 1 + (j - 1)));
 
-                            // do update
-                            for (usize k = 0; k < j; k++) {
-                                self->at(i + k) = std::forward<U>(items)[i + k];
-                            }
-                            changed(i, j);
-                        } else {
-                            // do remove and insert
-                            self->remove(i);
-                            self->insert(i, std::forward<U>(items)[i]);
-                        }
+            // build new key set
+            idx_map_type new_key_to_idx(self->get_allocator());
+            new_key_to_idx.reserve(item_size);
+            for (usize i = 0; i < item_size; i++) {
+                new_key_to_idx.insert({ ItemTrait<TItem>::key(items[i]), i });
+            }
+
+            // build old key set (before any modifications)
+            idx_map_type old_key_to_idx(self->get_allocator());
+            for (usize i = 0; i < (usize)self->size(); i++) {
+                old_key_to_idx.insert({ self->key_at(i), i });
+            }
+
+            // ── Phase 1: batch remove items not in new list ──
+            {
+                std::vector<usize> to_remove;
+                for (usize i = 0; i < (usize)self->size(); i++) {
+                    if (! new_key_to_idx.contains(self->key_at(i))) {
+                        to_remove.push_back(i);
                     }
-                } else {
-                    // do and insert
-                    self->insert(i, std::forward<U>(items)[i]);
+                }
+                for (auto it = to_remove.rbegin(); it != to_remove.rend();) {
+                    usize last  = *it;
+                    usize first = last;
+                    ++it;
+                    while (it != to_remove.rend() && *it == first - 1) {
+                        first = *it;
+                        ++it;
+                    }
+                    self->remove(first, last - first + 1);
                 }
             }
-            if (item_size < self->size()) {
-                // do remove
-                self->remove(item_size, self->size() - item_size);
+
+            // ── Phase 2: reorder existing items via layoutChanged ──
+            {
+                using key_vec =
+                    std::vector<key_type, rebind_alloc<key_type>>;
+                key_vec target_order(self->get_allocator());
+                target_order.reserve(self->size());
+                for (usize i = 0; i < item_size; i++) {
+                    auto key = ItemTrait<TItem>::key(items[i]);
+                    if (old_key_to_idx.contains(key)) {
+                        target_order.push_back(key);
+                    }
+                }
+
+                bool needs_reorder = false;
+                for (usize i = 0; i < target_order.size(); i++) {
+                    if (target_order[i] != self->key_at(i)) {
+                        needs_reorder = true;
+                        break;
+                    }
+                }
+
+                if (needs_reorder) {
+                    // build key -> new position BEFORE reorder
+                    idx_map_type key_to_new_pos(self->get_allocator());
+                    for (usize i = 0; i < target_order.size(); i++) {
+                        key_to_new_pos[target_order[i]] = i;
+                    }
+
+                    self->layoutAboutToBeChanged();
+                    auto old_persistent = self->persistentIndexList();
+
+                    // compute new persistent indexes (key_at still old order)
+                    QModelIndexList new_persistent;
+                    new_persistent.reserve(old_persistent.size());
+                    for (auto& idx : old_persistent) {
+                        if (idx.isValid() && idx.row() >= 0 &&
+                            idx.row() < (int)self->size()) {
+                            auto key = self->key_at(idx.row());
+                            if (auto it = key_to_new_pos.find(key);
+                                it != key_to_new_pos.end()) {
+                                new_persistent.append(self->index(it->second));
+                            } else {
+                                new_persistent.append(QModelIndex());
+                            }
+                        } else {
+                            new_persistent.append(QModelIndex());
+                        }
+                    }
+
+                    self->_reorder_impl(target_order);
+                    self->changePersistentIndexList(old_persistent, new_persistent);
+                    self->layoutChanged();
+                }
+            }
+
+            // ── Phase 3: update data for existing items ──
+            {
+                for (usize i = 0; i < (usize)self->size(); i++) {
+                    auto key = self->key_at(i);
+                    if (auto it = new_key_to_idx.find(key); it != new_key_to_idx.end()) {
+                        self->at(i) = std::forward<U>(items)[it->second];
+                    }
+                }
+                if (self->size() > 0) changed(0, self->size());
+            }
+
+            // ── Phase 4: insert new items ──
+            {
+                usize i   = 0;
+                usize pos = 0;
+
+                while (i < item_size) {
+                    auto key = ItemTrait<TItem>::key(items[i]);
+                    if (old_key_to_idx.contains(key)) {
+                        pos++;
+                        i++;
+                    } else {
+                        usize batch_start = i;
+                        while (i < item_size &&
+                               ! old_key_to_idx.contains(
+                                   ItemTrait<TItem>::key(items[i]))) {
+                            i++;
+                        }
+                        std::vector<TItem> batch;
+                        batch.reserve(i - batch_start);
+                        for (usize j = batch_start; j < i; j++) {
+                            batch.push_back(std::forward<U>(items)[j]);
+                        }
+                        auto inserted = self->insert(pos, std::move(batch));
+                        pos += inserted;
+                    }
+                }
             }
         }
     }
