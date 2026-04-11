@@ -1,5 +1,5 @@
 export module qextra:qobject_bindable_property_p;
-export import qcm.core;
+export import rstd.cppstd;
 export import qt;
 
 namespace qcm

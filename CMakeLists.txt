@@ -33,4 +33,4 @@ target_compile_features(qt PUBLIC cxx_std_20)
 target_link_libraries(qt PUBLIC Qt6::Core Qt6::Quick)
 
 target_compile_features(qextra PUBLIC cxx_std_20)
-target_link_libraries(qextra PUBLIC qt core.asio kstore::kstore)
+target_link_libraries(qextra PUBLIC qt ncrequest kstore::kstore)
