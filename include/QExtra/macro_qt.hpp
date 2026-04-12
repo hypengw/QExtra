@@ -419,4 +419,9 @@ QT_END_NAMESPACE
     } \
     QObjectBindableProperty<Class, Type, Class::_qt_property_##name##_offset, Signal> name;
 
+
+#define Q_CAST_IGNORE_ALIGN(body) QT_WARNING_PUSH QT_WARNING_DISABLE_GCC("-Wcast-align") body QT_WARNING_POP
+#define Q_D(Class) Class##Private * const d = d_func()
+#define Q_Q(Class) Class * const q = q_func()
+
 // clang-format on
