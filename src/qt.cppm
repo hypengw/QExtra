@@ -42,6 +42,7 @@ module;
 
 export module qt;
 
+export using ::qobject_cast;
 export using ::QFlags;
 export using ::QIncompatibleFlag;
 export using ::QString;
@@ -51,8 +52,11 @@ export using ::QUtf8StringView;
 export using ::QLatin1String;
 export using ::QSize;
 export using ::qint16;
+export using ::quint16;
 export using ::qint32;
+export using ::quint32;
 export using ::qint64;
+export using ::quint64;
 export using ::qlonglong;
 export using ::QDateTime;
 export using ::qRgb;
@@ -66,6 +70,7 @@ export using ::QVector2D;
 export using ::QVariant;
 export using ::QPointer;
 export using ::QVariantList;
+export using ::QStringList;
 export using ::QByteArray;
 export using ::QByteArrayView;
 export using ::QMessageLogger;
