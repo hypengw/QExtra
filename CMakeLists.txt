@@ -25,6 +25,7 @@ target_sources(
          src/helper.cppm
          src/bindable.cppm
          src/asio/mod.cppm
+         src/asio/task.cppm
          src/asio/forward.cppm
          src/asio/context.cppm
          src/asio/executor.cppm
