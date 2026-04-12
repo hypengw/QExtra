@@ -64,7 +64,7 @@ public:
         asio::co_spawn(ex,
                        m_p->watch_dog().watch(
                            ex,
-                           [f = std::move(f)] -> asio::awaitable<void> {
+                           [f = std::move(f)]() -> asio::awaitable<void> {
                                co_await f();
                            },
                            asio::chrono::minutes(3),
@@ -100,8 +100,7 @@ public:
     }
 };
 
-QAsyncResult::QAsyncResult(QObject* parent)
-    : QObject(parent), d_ptr(new QAsyncResultPrivate(this)) {
+QAsyncResult::QAsyncResult(QObject* parent): QObject(parent), d_ptr(new QAsyncResultPrivate(this)) {
     Q_D(QAsyncResult);
     connect(this, &QAsyncResult::statusChanged, this, [this](Status s) {
         if (s == Status::Finished) {
