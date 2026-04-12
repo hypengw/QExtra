@@ -1,9 +1,7 @@
-export module qextra:qobject_bindable_property_p;
+export module qextra:bindable;
 export import rstd.cppstd;
 export import qt;
 
-namespace qcm
-{
 export template<typename Class, typename T, auto Signal = nullptr>
 class ObjectBindableProperty : public QPropertyData<T> {
     using ThisType                  = ObjectBindableProperty<Class, T, Signal>;
@@ -170,5 +168,3 @@ private:
     }
     Class* m_owner;
 };
-
-} // namespace qcm

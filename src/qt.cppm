@@ -8,6 +8,7 @@ module;
 #include <QtCore/QObjectBindableProperty>
 #include <QtCore/QDataStream>
 #include <QtCore/QPluginLoader>
+#include <QtCore/QLoggingCategory>
 #include <QtCore/QPropertyData>
 #include <QtCore/QSettings>
 #include <QtCore/QStandardPaths>
@@ -65,7 +66,9 @@ export using ::QVariant;
 export using ::QPointer;
 export using ::QVariantList;
 export using ::QByteArray;
+export using ::QMessageLogger;
 export using ::qGetPtrHelper;
+
 
 export using ::QRegularExpression;
 export using ::QList;
