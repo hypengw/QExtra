@@ -25,7 +25,7 @@ public:
     QAsyncResult(QObject* parent = nullptr);
     virtual ~QAsyncResult();
 
-    static void initEx(QtExecutor, asio::thread_pool::executor_type);
+    static void initEx(QtExecutor, asio::thread_pool::executor_type, void(*)(QStringView));
     static void dropEx();
 
     enum class Status
@@ -105,6 +105,7 @@ private:
 
     auto watch_dog() -> WatchDog&;
 
+    QScopedPointer<QAsyncResultPrivate> d_ptr;
     Q_DECLARE_PRIVATE(QAsyncResult)
 };
 

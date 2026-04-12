@@ -424,6 +424,12 @@ QT_END_NAMESPACE
 #define Q_D(Class) Class##Private * const d = d_func()
 #define Q_Q(Class) Class * const q = q_func()
 
+#ifndef QT_MESSAGELOG_FILE
+#define Q_FUNC_INFO __PRETTY_FUNCTION__
+#define QT_MESSAGELOG_FILE static_cast<const char *>(__FILE__)
+#define QT_MESSAGELOG_LINE __LINE__
+#define QT_MESSAGELOG_FUNC static_cast<const char *>(Q_FUNC_INFO)
+#endif
 
 #define qDebug QMessageLogger(QT_MESSAGELOG_FILE, QT_MESSAGELOG_LINE, QT_MESSAGELOG_FUNC).debug
 #define qInfo QMessageLogger(QT_MESSAGELOG_FILE, QT_MESSAGELOG_LINE, QT_MESSAGELOG_FUNC).info

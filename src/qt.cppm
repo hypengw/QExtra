@@ -66,9 +66,10 @@ export using ::QVariant;
 export using ::QPointer;
 export using ::QVariantList;
 export using ::QByteArray;
+export using ::QByteArrayView;
 export using ::QMessageLogger;
+export using ::QScopedPointer;
 export using ::qGetPtrHelper;
-
 
 export using ::QRegularExpression;
 export using ::QList;

@@ -8,6 +8,17 @@ import :bindable;
 import :async;
 import asio;
 
+struct GlobalEx {
+    QtExecutor                       qex;
+    asio::thread_pool::executor_type pex;
+    void (*cb)(QStringView);
+};
+
+auto global_ex(rstd::Option<GlobalEx> in = {}) -> rstd::Option<GlobalEx>& {
+    static rstd::Option<GlobalEx> the { rstd::move(in) };
+    return the;
+}
+
 class QAsyncResultPrivate {
 public:
     using Status = QAsyncResult::Status;
@@ -70,8 +81,8 @@ public:
                                            self->setStatus(Status::Error);
                                        }
                                    });
+                                   qCritical() << loc.file_name();
                                    qCritical() << e_str;
-                                   // log::log(LogLevel::ERROR, loc, "{}", e_str);
                                }
                            }
 
@@ -89,8 +100,8 @@ public:
     }
 };
 
-QAsyncResult::QAsyncResult(QObject* parent): QObject(parent) {
-    // , d_ptr(make_up<Private>(this))
+QAsyncResult::QAsyncResult(QObject* parent)
+    : QObject(parent), d_ptr(new QAsyncResultPrivate(this)) {
     Q_D(QAsyncResult);
     connect(this, &QAsyncResult::statusChanged, this, [this](Status s) {
         if (s == Status::Finished) {
@@ -99,7 +110,7 @@ QAsyncResult::QAsyncResult(QObject* parent): QObject(parent) {
             errorOccurred(error());
         }
         if (forwardError() && s == Status::Error) {
-            // emit Global::instance() -> errorOccurred(error());
+            global_ex()->cb(error());
         }
     });
 
@@ -123,18 +134,9 @@ void QAsyncResult::hold(QStringView name, QObject* o) {
     }
 }
 
-struct GlobalEx {
-    QtExecutor                       qex;
-    asio::thread_pool::executor_type pex;
-};
-
-auto global_ex(rstd::Option<GlobalEx> in = {}) -> rstd::Option<GlobalEx>& {
-    static rstd::Option<GlobalEx> the { rstd::move(in) };
-    return the;
-}
-
-void QAsyncResult::initEx(QtExecutor qex, asio::thread_pool::executor_type pex) {
-    global_ex(rstd::Some(GlobalEx { qex, pex }));
+void QAsyncResult::initEx(QtExecutor qex, asio::thread_pool::executor_type pex,
+                          void (*cb)(QStringView)) {
+    global_ex(rstd::Some(GlobalEx { qex, pex, cb }));
 }
 void QAsyncResult::dropEx() { global_ex().take(); }
 
