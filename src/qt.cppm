@@ -50,6 +50,7 @@ export using ::QStringView;
 export using ::QUtf8StringView;
 export using ::QLatin1String;
 export using ::QSize;
+export using ::qint16;
 export using ::qint32;
 export using ::qint64;
 export using ::qlonglong;
