@@ -24,6 +24,7 @@ target_sources(
          src/async.cppm
          src/helper.cppm
          src/bindable.cppm
+         src/global_static.cppm
          src/asio/mod.cppm
          src/asio/task.cppm
          src/asio/forward.cppm
@@ -44,9 +45,10 @@ split_moc_files(
   MOC_SOURCE_FILES
   src/async.cppm)
 
-target_sources(qextra PRIVATE src/async.cpp 
+target_sources(qextra PRIVATE src/async.cpp
+         src/global_static.cpp
          src/asio/mod.cpp)
-set_source_files_properties(src/async.cpp PROPERTIES SKIP_AUTOMOC ON)
+set_source_files_properties(src/async.cpp src/global_static.cpp PROPERTIES SKIP_AUTOMOC ON)
 
 target_compile_features(qt PUBLIC cxx_std_20)
 target_link_libraries(qt PUBLIC Qt6::Core Qt6::Quick)
