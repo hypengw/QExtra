@@ -3,6 +3,7 @@ module;
 #include <QtCore/QUuid>
 #include <QtCore/QEvent>
 #include <QtCore/QThread>
+#include <QtCore/QThreadPool>
 #include <QtCore/QCoreApplication>
 #include <QtCore/QRunnable>
 #include <QtCore/QObjectBindableProperty>
@@ -13,9 +14,14 @@ module;
 #include <QtCore/QSettings>
 #include <QtCore/QStandardPaths>
 #include <QtCore/QDir>
+#include <QtCore/QFile>
+#include <QtCore/QFileInfo>
 #include <QtCore/QLibrary>
 #include <QtCore/QRegularExpression>
 #include <QtCore/QGlobalStatic>
+#include <QtCore/QCryptographicHash>
+#include <QtCore/QRandomGenerator>
+#include <QtCore/QStringBuilder>
 #include <QtCore/QSortFilterProxyModel>
 #include <QtCore/QIdentityProxyModel>
 
@@ -24,11 +30,14 @@ module;
 
 #include <QtGui/QSurfaceFormat>
 #include <QtGui/QClipboard>
+#include <QtGui/QImageReader>
+#include <QtGui/QImageWriter>
 
 #include <QtQml/QJSValueIterator>
 #include <QtQml/QQmlPropertyMap>
 #include <QtQml/QQmlListProperty>
 #include <QtQml/QQmlApplicationEngine>
+#include <QtQml/QQmlParserStatus>
 
 #include <QtQuick/QQuickItem>
 #include <QtQuick/QQuickWindow>
@@ -87,6 +96,13 @@ export using ::QGlobalStatic;
 export using ::QTimer;
 export using ::QEvent;
 export using ::QThread;
+export using ::QThreadPool;
+export using ::QFile;
+export using ::QFileDevice;
+export using ::QFileInfo;
+export using ::QCryptographicHash;
+export using ::QRandomGenerator;
+export using ::qEnvironmentVariable;
 export using ::QObject;
 export using ::QMetaType;
 export using ::QMetaObject;
@@ -100,6 +116,8 @@ export using ::QGuiApplication;
 export using ::QSurfaceFormat;
 export using ::QWindowList;
 export using ::QClipboard;
+export using ::QImageReader;
+export using ::QImageWriter;
 
 export using ::QApplication;
 
@@ -121,6 +139,7 @@ export using ::QQmlComponent;
 export using ::QQmlListProperty;
 export using ::QQmlEngineExtensionPlugin;
 export using ::QQmlContext;
+export using ::QQmlParserStatus;
 export using ::qmlRegisterUncreatableType;
 
 export using ::QQuickItem;
@@ -152,6 +171,11 @@ export namespace Qt
 {
 using Qt::ConnectionType;
 using Qt::makePropertyBinding;
+using Qt::AutoConnection;
+using Qt::DirectConnection;
+using Qt::QueuedConnection;
+using Qt::BlockingQueuedConnection;
+using Qt::UniqueConnection;
 } // namespace Qt
 
 export namespace QtPrivate
