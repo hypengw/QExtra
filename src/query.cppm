@@ -33,7 +33,7 @@ protected:
 
     auto last() const -> const QDateTime& { return m_last; }
     void setLast(const QDateTime& t, const QDateTime& last = QDateTime::currentDateTime()) {
-        m_last = cppstd::min<QDateTime>(t, last);
+        m_last = std::min<QDateTime>(t, last);
     }
     void resetLast() { m_last = QDateTime::fromSecsSinceEpoch(0); }
     auto record() {

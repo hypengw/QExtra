@@ -34,14 +34,14 @@ public:
     QAsyncResult*            m_p;
     bool                     m_forward_error;
     QVariant                 m_data;
-    cppstd::function<void()> m_cb;
+    std::function<void()> m_cb;
 
     WatchDog                                       m_wdog;
-    cppstd::map<QString, QObject*, cppstd::less<>> m_hold;
+    std::map<QString, QObject*, std::less<>> m_hold;
 
     bool m_use_queue;
     bool m_queue_exec_mark;
-    cppstd::deque<cppstd::tuple<cppstd::function<asio::awaitable<void>()>, cppstd::source_location>>
+    std::deque<std::tuple<std::function<asio::awaitable<void>()>, std::source_location>>
         m_queue;
 
     ObjectBindableProperty<QAsyncResult, bool, &QAsyncResult ::queryingChanged> m_querying;
@@ -69,7 +69,7 @@ public:
                            },
                            asio::chrono::minutes(3),
                            alloc),
-                       asio::bind_allocator(alloc, [self, main_ex, loc](cppstd::exception_ptr p) {
+                       asio::bind_allocator(alloc, [self, main_ex, loc](std::exception_ptr p) {
                            if (p) {
                                try {
                                    std::rethrow_exception(p);
@@ -246,7 +246,7 @@ void QAsyncResult::set_data(const QVariant& v) {
     }
 }
 void QAsyncResult::push(std::function<asio::awaitable<void>()> in,
-                        const cppstd::source_location&         loc) {
+                        const std::source_location&         loc) {
     Q_D(QAsyncResult);
     d->m_queue.emplace_back(in, loc);
 

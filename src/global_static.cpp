@@ -5,8 +5,8 @@ module qextra;
 import :global_static;
 
 struct GlobalStatic::HolderImpl {
-    cppstd::atomic<void*>         instance { nullptr };
-    cppstd::function<void(void*)> deleter;
+    std::atomic<void*>         instance { nullptr };
+    std::function<void(void*)> deleter;
 
     void reset() {
         if (deleter && instance) {
@@ -22,10 +22,10 @@ struct GlobalStatic::HolderImpl {
 
 class GlobalStatic::Private {
 public:
-    cppstd::map<cppstd::string, cppstd::shared_ptr<HolderImpl>, cppstd::less<>> instances;
+    std::map<std::string, std::shared_ptr<HolderImpl>, std::less<>> instances;
 };
 
-GlobalStatic::GlobalStatic(): d_ptr(cppstd::make_unique<Private>()) {}
+GlobalStatic::GlobalStatic(): d_ptr(std::make_unique<Private>()) {}
 GlobalStatic::~GlobalStatic() { reset(); }
 auto GlobalStatic::instance() -> GlobalStatic* {
     static GlobalStatic theGlobalStatic;
@@ -37,13 +37,13 @@ auto GlobalStatic::data(HolderImpl& holder) -> void* {
     return holder.instance;
 }
 
-auto GlobalStatic::add_impl(cppstd::string_view name, void* instance,
-                            cppstd::function<void(void*)> deleter)
-    -> cppstd::shared_ptr<HolderImpl> {
-    auto holder      = cppstd::make_shared<HolderImpl>();
+auto GlobalStatic::add_impl(std::string_view name, void* instance,
+                            std::function<void(void*)> deleter)
+    -> std::shared_ptr<HolderImpl> {
+    auto holder      = std::make_shared<HolderImpl>();
     holder->instance = instance;
     holder->deleter  = deleter;
-    d_ptr->instances.insert({ cppstd::string(name), holder });
+    d_ptr->instances.insert({ std::string(name), holder });
     return holder;
 }
 void GlobalStatic::reset() {

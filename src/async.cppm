@@ -54,17 +54,17 @@ public:
     void set_use_queue(bool);
 
     Q_INVOKABLE virtual void reload();
-    void                     set_reload_callback(const cppstd::function<void()>&);
+    void                     set_reload_callback(const std::function<void()>&);
 
     template<typename Fn>
-    void spawn(Fn&& f, const cppstd::source_location loc = cppstd::source_location::current());
+    void spawn(Fn&& f, const std::source_location loc = std::source_location::current());
 
     template<typename T, typename TE>
     void from(const Result<T, TE>& exp) {
         if (exp) {
-            if constexpr (cppstd::is_base_of_v<QObject,
-                                               cppstd::decay_t<std::remove_pointer_t<T>>> &&
-                          cppstd::is_pointer_v<T>) {
+            if constexpr (std::is_base_of_v<QObject,
+                                               std::decay_t<std::remove_pointer_t<T>>> &&
+                          std::is_pointer_v<T>) {
                 set_data(exp.value());
             } else {
                 set_data(QVariant::fromValue(nullptr));
@@ -100,7 +100,7 @@ public:
     }
 
 private:
-    void  push(cppstd::function<asio::awaitable<void>()>, const cppstd::source_location& loc);
+    void  push(std::function<asio::awaitable<void>()>, const std::source_location& loc);
     usize size() const;
 
     auto watch_dog() -> WatchDog&;
@@ -166,7 +166,7 @@ public:
 };
 
 template<typename Fn>
-void QAsyncResult::spawn(Fn&& f, const cppstd::source_location loc) {
+void QAsyncResult::spawn(Fn&& f, const std::source_location loc) {
     QWatcher<QAsyncResult> self { this };
     auto                   main_ex { get_executor() };
     auto                   ex    = asio::make_strand(pool_executor());
@@ -176,12 +176,12 @@ void QAsyncResult::spawn(Fn&& f, const cppstd::source_location loc) {
     } else {
         asio::co_spawn(
             ex,
-            watch_dog().watch(ex, cppstd::forward<Fn>(f), asio::chrono::minutes(3), alloc),
-            asio::bind_allocator(alloc, [self, main_ex, loc](cppstd::exception_ptr p) {
+            watch_dog().watch(ex, std::forward<Fn>(f), asio::chrono::minutes(3), alloc),
+            asio::bind_allocator(alloc, [self, main_ex, loc](std::exception_ptr p) {
                 handle_asio_exception(
                     p,
-                    [main_ex, self](cppstd::string_view error) {
-                        auto e_str = cppstd::string(error);
+                    [main_ex, self](std::string_view error) {
+                        auto e_str = std::string(error);
                         asio::post(main_ex, [self, e_str]() {
                             if (self) {
                                 self->setError(QString::fromStdString(e_str));

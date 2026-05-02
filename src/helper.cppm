@@ -50,14 +50,14 @@ inline bool is_numeric_metatype(QMetaType type) { return is_numeric_metatype_id(
 
 /*
 template<typename T, typename F>
-    requires cppstd::ranges::range<F> && convertable<T, cppstd::ranges::range_value_t<F>>
+    requires std::ranges::range<F> && convertable<T, std::ranges::range_value_t<F>>
 struct Convert<QList<T>, F> {
     static void from(QList<T>& out, const F& f) {
-        using from_value_type = cppstd::ranges::range_value_t<F>;
+        using from_value_type = std::ranges::range_value_t<F>;
         out.clear();
-        cppstd::transform(cppstd::ranges::begin(f),
-                          cppstd::ranges::end(f),
-                          cppstd::back_inserter(out),
+        std::transform(std::ranges::begin(f),
+                          std::ranges::end(f),
+                          std::back_inserter(out),
                           [](const from_value_type& v) {
                               return convert_from<T>(v);
                           });
@@ -65,67 +65,67 @@ struct Convert<QList<T>, F> {
 };
 
 template<typename T>
-    requires rstd::mtp::convertible_to<T, cppstd::string_view> ||
-             convertable<cppstd::string_view, T> || convertable<cppstd::string, T>
+    requires rstd::mtp::convertible_to<T, std::string_view> ||
+             convertable<std::string_view, T> || convertable<std::string, T>
 struct Convert<QString, T> {
     static void from(QString& out, const T& in) {
-        if constexpr (rstd::mtp::convertible_to<T, cppstd::string_view>) {
-            auto sv = cppstd::string_view(in);
+        if constexpr (rstd::mtp::convertible_to<T, std::string_view>) {
+            auto sv = std::string_view(in);
             out     = QString::fromUtf8(sv.data(), sv.size());
-        } else if constexpr (convertable<cppstd::string_view, T>) {
-            auto sv = convert_from<cppstd::string_view>(in);
+        } else if constexpr (convertable<std::string_view, T>) {
+            auto sv = convert_from<std::string_view>(in);
             out     = QString::fromUtf8(sv.data(), sv.size());
         } else {
-            out = QString::fromStdString(convert_from<cppstd::string>(in));
+            out = QString::fromStdString(convert_from<std::string>(in));
         }
     }
 };
 
 template<>
-struct Convert<cppstd::string, QString> {
-    static void from(cppstd::string& out, const QString& in) { out = in.toStdString(); }
+struct Convert<std::string, QString> {
+    static void from(std::string& out, const QString& in) { out = in.toStdString(); }
 };
 
 template<>
-struct Convert<cppstd::string, QStringView> {
-    static void from(cppstd::string& out, QStringView in) { out = in.toString().toStdString(); }
+struct Convert<std::string, QStringView> {
+    static void from(std::string& out, QStringView in) { out = in.toString().toStdString(); }
 };
 
 template<>
-struct Convert<cppstd::string, QLatin1String> {
-    static void from(cppstd::string& out, QLatin1String in) { out = in.toString().toStdString(); }
+struct Convert<std::string, QLatin1String> {
+    static void from(std::string& out, QLatin1String in) { out = in.toString().toStdString(); }
 };
 
 template<>
-struct Convert<cppstd::string, QUtf8StringView> {
-    static void from(cppstd::string& out, QUtf8StringView in) {
-        out = cppstd::string_view { in.data(), (usize)in.size() };
+struct Convert<std::string, QUtf8StringView> {
+    static void from(std::string& out, QUtf8StringView in) {
+        out = std::string_view { in.data(), (usize)in.size() };
     }
 };
 
 template<>
-struct Convert<cppstd::string, QAnyStringView> {
-    static void from(cppstd::string& out, QAnyStringView in) {
+struct Convert<std::string, QAnyStringView> {
+    static void from(std::string& out, QAnyStringView in) {
         in.visit([&out](auto v) {
-            Convert<cppstd::string, decltype(v)>::from(out, v);
+            Convert<std::string, decltype(v)>::from(out, v);
         });
     }
 };
 
 
 template<typename T>
-struct Convert<cppstd::optional<T>, QVariant> {
-    using out_type = cppstd::optional<T>;
+struct Convert<std::optional<T>, QVariant> {
+    using out_type = std::optional<T>;
     using in_type  = QVariant;
     static void from(out_type& o, const in_type& in) {
-        o = in.canConvert<T>() ? out_type(in.value<T>()) : cppstd::nullopt;
+        o = in.canConvert<T>() ? out_type(in.value<T>()) : std::nullopt;
     }
 };
 
 template<typename T>
-struct Convert<QVariant, cppstd::optional<T>> {
+struct Convert<QVariant, std::optional<T>> {
     using out_type = QVariant;
-    using in_type  = cppstd::optional<T>;
+    using in_type  = std::optional<T>;
     static void from(out_type& o, const in_type& in) {
         if (in) {
             o = out_type::fromValue(in.value());
@@ -184,17 +184,17 @@ struct rstd::Impl<rstd::convert::From<rstd::string::String>, QString> {
     }
 };
 template<>
-struct rstd::Impl<rstd::convert::From<cppstd::string>, QString> {
-    static auto from(cppstd::string str) { return QString::fromStdString(rstd::move(str)); }
+struct rstd::Impl<rstd::convert::From<std::string>, QString> {
+    static auto from(std::string str) { return QString::fromStdString(rstd::move(str)); }
 };
 template<>
-struct rstd::Impl<rstd::convert::From<cppstd::string>, QUrl> {
-    static auto from(cppstd::string str) { return QString::fromStdString(rstd::move(str)); }
+struct rstd::Impl<rstd::convert::From<std::string>, QUrl> {
+    static auto from(std::string str) { return QString::fromStdString(rstd::move(str)); }
 };
 
 template<>
-struct rstd::Impl<rstd::convert::From<cppstd::string>, QStringView> {
-    static auto from(cppstd::string str) { return QString::fromStdString(rstd::move(str)); }
+struct rstd::Impl<rstd::convert::From<std::string>, QStringView> {
+    static auto from(std::string str) { return QString::fromStdString(rstd::move(str)); }
 };
 
 template<>

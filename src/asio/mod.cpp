@@ -4,12 +4,12 @@ module;
 module qextra;
 using namespace Qt::StringLiterals;
 
-void handle_asio_exception(cppstd::exception_ptr                                   eptr,
-                           asio::any_completion_handler<void(cppstd::string_view)> on_error,
-                           const cppstd::source_location                           loc) {
+void handle_asio_exception(std::exception_ptr                                   eptr,
+                           asio::any_completion_handler<void(std::string_view)> on_error,
+                           const std::source_location                           loc) {
     try {
         if (eptr) {
-            cppstd::rethrow_exception(eptr);
+            std::rethrow_exception(eptr);
         }
     } catch (const asio::system_error& ex) {
         auto        code     = ex.code().value();
@@ -22,12 +22,12 @@ void handle_asio_exception(cppstd::exception_ptr                                
         }
 
         if (warn) {
-            qWarning() << cppstd::format("[{}] {}", category.name(), ex.what());
+            qWarning() << std::format("[{}] {}", category.name(), ex.what());
         } else {
-            qCritical() << cppstd::format("[{}] {}", category.name(), ex.what());
+            qCritical() << std::format("[{}] {}", category.name(), ex.what());
         }
         if (on_error) on_error(ex.what());
-    } catch (const cppstd::exception& ex) {
+    } catch (const std::exception& ex) {
         qCritical() << ex.what();
         if (on_error) on_error(ex.what());
     }

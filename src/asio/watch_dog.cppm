@@ -12,12 +12,12 @@ public:
 
     bool is_running() const {
         if (m_timer) {
-            return cppstd::chrono::operator>(m_timer->expiry(), clock::now());
+            return std::chrono::operator>(m_timer->expiry(), clock::now());
         }
         return false;
     }
 
-    template<typename Ex, typename F, typename Allocator = cppstd::allocator<void>>
+    template<typename Ex, typename F, typename Allocator = std::allocator<void>>
         requires(! rstd::mtp::same_as<duration, rstd::mtp::rm_cvf<Allocator>>)
     auto watch(Ex&& ex, F&& f, const duration& t = asio::chrono::minutes(5), Allocator&& alloc = {})
         -> asio::awaitable<void> {
@@ -34,7 +34,7 @@ public:
         }
     }
 
-    template<typename Ex, typename F, typename CT, typename Allocator = cppstd::allocator<void>>
+    template<typename Ex, typename F, typename CT, typename Allocator = std::allocator<void>>
     auto spawn(Ex&& ex, F&& f, CT&& ct, const duration& t = asio::chrono::minutes(5),
                Allocator&& alloc = {}) {
         asio::co_spawn(ex, watch(ex, rstd::forward<F>(f), t, alloc), rstd::forward<CT>(ct));
@@ -42,7 +42,7 @@ public:
 
 private:
     template<typename F, typename Allocator>
-    static auto watch_impl(cppstd::shared_ptr<asio::steady_timer> timer, F f, Allocator alloc)
+    static auto watch_impl(std::shared_ptr<asio::steady_timer> timer, F f, Allocator alloc)
         -> asio::awaitable<void> {
         auto ex = co_await asio::this_coro::executor_;
         auto [order, exp, ec] =
@@ -54,9 +54,9 @@ private:
 
         timer->expires_after(asio::chrono::seconds(0));
 
-        if (exp) cppstd::rethrow_exception(exp);
+        if (exp) std::rethrow_exception(exp);
         co_return;
     }
 
-    cppstd::shared_ptr<asio::steady_timer> m_timer;
+    std::shared_ptr<asio::steady_timer> m_timer;
 };

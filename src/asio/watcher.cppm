@@ -10,7 +10,7 @@ public:
     QWatcher(T* t): QWatcher() {
         if (t != nullptr) {
             auto thread = t->thread();
-            m_ptr       = cppstd::shared_ptr<helper>(new helper(t, thread), [](helper* h) {
+            m_ptr       = std::shared_ptr<helper>(new helper(t, thread), [](helper* h) {
                 if (QThread::isMainThread() && QThread::currentThread() == h->thread) {
                     auto exec = QThread::currentThread()->property("exec");
                     if (! exec.isNull() && ! exec.value<bool>()) {
@@ -73,5 +73,5 @@ private:
         }
     };
 
-    cppstd::shared_ptr<helper> m_ptr;
+    std::shared_ptr<helper> m_ptr;
 };
