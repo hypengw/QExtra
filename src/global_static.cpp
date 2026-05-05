@@ -33,7 +33,7 @@ auto GlobalStatic::instance() -> GlobalStatic* {
 }
 
 auto GlobalStatic::data(HolderImpl& holder) -> void* {
-    assert(holder.instance);
+    rstd_assert(holder.instance);
     return holder.instance;
 }
 
