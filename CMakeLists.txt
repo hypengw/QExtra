@@ -26,6 +26,7 @@ target_sources(
          src/bindable.cppm
          src/global_static.cppm
          src/query.cppm
+         src/select_storage.cppm
          src/asio/mod.cppm
          src/asio/task.cppm
          src/asio/forward.cppm
@@ -45,11 +46,13 @@ split_moc_files(
   QExtra
   MOC_SOURCE_FILES
   src/async.cppm
-  src/query.cppm)
+  src/query.cppm
+  src/select_storage.cppm)
 
 target_sources(qextra PRIVATE src/async.cpp
          src/global_static.cpp
          src/query.cpp
+         src/select_storage.cpp
          src/asio/mod.cpp
          src/kstore/share_store.cpp
          src/kstore/moc.cpp
