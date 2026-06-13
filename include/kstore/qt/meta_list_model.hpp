@@ -6,6 +6,9 @@
 #endif
 
 #include <QtCore/QAbstractItemModel>
+#include <QtCore/QSet>
+#include <QtCore/QStringList>
+#include <QtCore/QVariant>
 #include "kstore/qt/meta_role.hpp"
 #include "kstore/item_trait.hpp"
 #include "kstore/list_impl.hpp"
@@ -23,6 +26,7 @@ public:
     virtual void rawInsert(qint32 index, std::span<const QVariant>) = 0;
     virtual void rawMove(qint32 src, qint32 dst, qint32 count = 1)  = 0;
     virtual auto rawItemMeta() const -> QMetaObject const*          = 0;
+    virtual auto rawKeyAt(qint32 index) const -> QVariant { return index; }
     virtual auto rawSize() const -> std::size_t                     = 0;
     virtual void rawErase(qint32 start, qint32 end)                 = 0;
 };
@@ -35,11 +39,16 @@ class QMetaListModel : public QAbstractListModel, public QMetaRoleNames {
     Q_OBJECT
 
     Q_PROPERTY(bool hasMore READ hasMore WRITE setHasMore NOTIFY hasMoreChanged)
+    Q_PROPERTY(bool selectionEnabled READ selectionEnabled WRITE setSelectionEnabled NOTIFY
+                   selectionEnabledChanged)
+    Q_PROPERTY(qint32 selectedCount READ selectedCount NOTIFY selectedCountChanged)
 
     template<typename TItem, typename IMPL, ListStoreType Store, typename Allocator>
     friend class QMetaListModelCRTP;
 
 public:
+    static constexpr int SelectedRole = Qt::UserRole;
+
     QMetaListModel(QListInterface* oper, QObject* parent = nullptr);
     virtual ~QMetaListModel();
 
@@ -51,11 +60,29 @@ public:
     auto hasMore() const -> bool;
     void setHasMore(bool);
 
+    auto selectionEnabled() const -> bool;
+    void setSelectionEnabled(bool);
+    auto selectedCount() const -> qint32;
+
+    Q_INVOKABLE bool         isSelected(qint32 row) const;
+    Q_INVOKABLE bool         setSelected(qint32 row, bool selected);
+    Q_INVOKABLE bool         toggleSelected(qint32 row);
+    Q_INVOKABLE bool         selectOnly(qint32 row);
+    Q_INVOKABLE bool         selectRange(qint32 from, qint32 to, bool selected = true);
+    Q_INVOKABLE void         clearSelection();
+    Q_INVOKABLE void         setSelectedKeys(const QStringList& keys);
+    Q_INVOKABLE QStringList  selectedKeys() const;
+    Q_INVOKABLE QVariantList selectedRows() const;
+    Q_INVOKABLE QVariantList selectedItems() const;
+
     bool canFetchMore(const QModelIndex&) const override;
     void fetchMore(const QModelIndex&) override;
 
     Q_SIGNAL void hasMoreChanged(bool);
     Q_SIGNAL void reqFetchMore(qint32);
+    Q_SIGNAL void selectionEnabledChanged();
+    Q_SIGNAL void selectedCountChanged();
+    Q_SIGNAL void selectionChanged();
 
     int rowCount(const QModelIndex& = QModelIndex()) const override;
 
@@ -73,6 +100,11 @@ public:
 protected:
     QListInterface* m_oper;
     bool            m_has_more;
+    bool            m_selection_enabled;
+    QSet<QString>   m_selected_keys;
+
+    auto selectionKeyAt(qint32 row) const -> QString;
+    void emitSelectionRolesChanged();
 };
 
 template<typename TItem, typename IMPL, ListStoreType Store, typename Allocator>
@@ -127,6 +159,18 @@ public:
             return &TItem::staticMetaObject;
         } else {
             return nullptr;
+        }
+    }
+    auto rawKeyAt(qint32 index) const -> QVariant override {
+        if (index < 0 || index >= static_cast<qint32>(_cimpl().size())) return {};
+        if constexpr (requires(const TItem& item) {
+                          typename ItemTrait<TItem>::key_type;
+                          ItemTrait<TItem>::key(item);
+                      }) {
+            auto key = ItemTrait<TItem>::key(_cimpl().at(index));
+            return QVariant::fromValue(key);
+        } else {
+            return index;
         }
     }
     auto rawSize() const -> std::size_t override { return _cimpl().size(); }

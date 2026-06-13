@@ -15,6 +15,12 @@ namespace kstore
 QGadgetListModel::QGadgetListModel(QListInterface* oper, QObject* parent)
     : QMetaListModel(oper, parent) {}
 QVariant QGadgetListModel::data(const QModelIndex& index, int role) const {
+    if (! index.isValid() || index.row() < 0 ||
+        index.row() >= static_cast<qint32>(m_oper->rawSize()))
+        return {};
+
+    if (role == QMetaListModel::SelectedRole) return isSelected(index.row());
+
     if (auto prop = this->propertyOfRole(role); prop) {
         return prop.value().readOnGadget(m_oper->rawAt(index.row()));
     }
@@ -39,6 +45,10 @@ QVariant QGadgetListModel::data(const QModelIndex& index, int role) const {
 bool QGadgetListModel::setData(const QModelIndex& index, const QVariant& value, int role) {
     const auto row = index.row();
     if (row >= 0 && row < (qint32)m_oper->rawSize()) {
+        if (role == QMetaListModel::SelectedRole) {
+            return setSelected(row, value.toBool());
+        }
+
         if (auto prop = this->propertyOfRole(role); prop) {
             bool changed = prop.value().writeOnGadget(m_oper->rawAt(index.row()), value);
             if (changed) {

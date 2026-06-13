@@ -1,12 +1,17 @@
 #include "kstore/qt/meta_list_model.hpp"
 
+#include <algorithm>
+
 #include <QMetaProperty>
 
 namespace kstore
 {
 
 QMetaListModel::QMetaListModel(QListInterface* oper, QObject* parent)
-    : QAbstractListModel(parent), m_oper(oper), m_has_more(false) {}
+    : QAbstractListModel(parent),
+      m_oper(oper),
+      m_has_more(false),
+      m_selection_enabled(false) {}
 
 QMetaListModel::~QMetaListModel() {}
 auto QMetaListModel::hasMore() const -> bool { return m_has_more; }
@@ -16,6 +21,169 @@ void QMetaListModel::setHasMore(bool v) {
         hasMoreChanged(v);
     }
 }
+
+auto QMetaListModel::selectionEnabled() const -> bool { return m_selection_enabled; }
+
+void QMetaListModel::setSelectionEnabled(bool v) {
+    if (m_selection_enabled == v) return;
+
+    layoutAboutToBeChanged();
+    m_selection_enabled = v;
+    if (! m_selection_enabled && ! m_selected_keys.isEmpty()) {
+        m_selected_keys.clear();
+        Q_EMIT selectedCountChanged();
+        Q_EMIT selectionChanged();
+    }
+    layoutChanged();
+    Q_EMIT selectionEnabledChanged();
+    emitSelectionRolesChanged();
+}
+
+auto QMetaListModel::selectedCount() const -> qint32 {
+    return static_cast<qint32>(m_selected_keys.size());
+}
+
+auto QMetaListModel::selectionKeyAt(qint32 row) const -> QString {
+    if (row < 0 || row >= rowCount()) return {};
+    return m_oper->rawKeyAt(row).toString();
+}
+
+auto QMetaListModel::isSelected(qint32 row) const -> bool {
+    if (! m_selection_enabled) return false;
+    const auto key = selectionKeyAt(row);
+    return ! key.isEmpty() && m_selected_keys.contains(key);
+}
+
+auto QMetaListModel::setSelected(qint32 row, bool selected) -> bool {
+    if (! m_selection_enabled) return false;
+    const auto key = selectionKeyAt(row);
+    if (key.isEmpty()) return false;
+
+    const bool was_selected = m_selected_keys.contains(key);
+    if (was_selected == selected) return false;
+
+    if (selected)
+        m_selected_keys.insert(key);
+    else
+        m_selected_keys.remove(key);
+
+    const auto idx = index(row);
+    Q_EMIT dataChanged(idx, idx, { SelectedRole });
+    Q_EMIT selectedCountChanged();
+    Q_EMIT selectionChanged();
+    return true;
+}
+
+auto QMetaListModel::toggleSelected(qint32 row) -> bool {
+    return setSelected(row, ! isSelected(row));
+}
+
+auto QMetaListModel::selectOnly(qint32 row) -> bool {
+    if (! m_selection_enabled) return false;
+    const auto key = selectionKeyAt(row);
+    if (key.isEmpty()) return false;
+    if (m_selected_keys.size() == 1 && m_selected_keys.contains(key)) return false;
+
+    m_selected_keys.clear();
+    m_selected_keys.insert(key);
+    emitSelectionRolesChanged();
+    Q_EMIT selectedCountChanged();
+    Q_EMIT selectionChanged();
+    return true;
+}
+
+auto QMetaListModel::selectRange(qint32 from, qint32 to, bool selected) -> bool {
+    if (! m_selection_enabled) return false;
+    const auto rows = rowCount();
+    if (rows <= 0) return false;
+
+    from = std::clamp(from, 0, rows - 1);
+    to   = std::clamp(to, 0, rows - 1);
+    if (from > to) std::swap(from, to);
+
+    bool changed = false;
+    for (auto row = from; row <= to; ++row) {
+        const auto key = selectionKeyAt(row);
+        if (key.isEmpty()) continue;
+        const bool was_selected = m_selected_keys.contains(key);
+        if (was_selected == selected) continue;
+        changed = true;
+        if (selected)
+            m_selected_keys.insert(key);
+        else
+            m_selected_keys.remove(key);
+    }
+
+    if (! changed) return false;
+    Q_EMIT dataChanged(index(from), index(to), { SelectedRole });
+    Q_EMIT selectedCountChanged();
+    Q_EMIT selectionChanged();
+    return true;
+}
+
+void QMetaListModel::clearSelection() {
+    if (m_selected_keys.isEmpty()) return;
+    m_selected_keys.clear();
+    emitSelectionRolesChanged();
+    Q_EMIT selectedCountChanged();
+    Q_EMIT selectionChanged();
+}
+
+void QMetaListModel::setSelectedKeys(const QStringList& keys) {
+    QSet<QString> next;
+    next.reserve(keys.size());
+    for (const auto& key : keys) {
+        if (! key.isEmpty()) next.insert(key);
+    }
+    if (next == m_selected_keys) return;
+    m_selected_keys = std::move(next);
+    emitSelectionRolesChanged();
+    Q_EMIT selectedCountChanged();
+    Q_EMIT selectionChanged();
+}
+
+auto QMetaListModel::selectedKeys() const -> QStringList {
+    QStringList out;
+    QSet<QString> seen;
+    out.reserve(m_selected_keys.size());
+    seen.reserve(m_selected_keys.size());
+
+    for (auto row = 0; row < rowCount(); ++row) {
+        const auto key = selectionKeyAt(row);
+        if (! key.isEmpty() && m_selected_keys.contains(key)) {
+            out.append(key);
+            seen.insert(key);
+        }
+    }
+
+    for (const auto& key : m_selected_keys) {
+        if (! seen.contains(key)) out.append(key);
+    }
+    return out;
+}
+
+auto QMetaListModel::selectedRows() const -> QVariantList {
+    QVariantList out;
+    for (auto row = 0; row < rowCount(); ++row) {
+        if (isSelected(row)) out.append(row);
+    }
+    return out;
+}
+
+auto QMetaListModel::selectedItems() const -> QVariantList {
+    QVariantList out;
+    for (auto row = 0; row < rowCount(); ++row) {
+        if (isSelected(row)) out.append(item(row));
+    }
+    return out;
+}
+
+void QMetaListModel::emitSelectionRolesChanged() {
+    const auto rows = rowCount();
+    if (rows <= 0) return;
+    Q_EMIT dataChanged(index(0), index(rows - 1), { SelectedRole });
+}
+
 bool QMetaListModel::canFetchMore(const QModelIndex&) const { return m_has_more; }
 void QMetaListModel::fetchMore(const QModelIndex&) {
     setHasMore(false);
@@ -105,6 +273,10 @@ Qt::ItemFlags QMetaListModel::flags(const QModelIndex& index) const {
            Qt::ItemIsDropEnabled;
 }
 
-auto QMetaListModel::roleNames() const -> QHash<int, QByteArray> { return this->roleNamesRef(); }
+auto QMetaListModel::roleNames() const -> QHash<int, QByteArray> {
+    auto out = this->roleNamesRef();
+    if (m_selection_enabled) out.insert(SelectedRole, "selected");
+    return out;
+}
 
 } // namespace kstore
