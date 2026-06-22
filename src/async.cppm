@@ -27,6 +27,8 @@ public:
 
     static void initEx(QtExecutor, asio::thread_pool::executor_type, void(*)(QStringView));
     static void dropEx();
+    static auto qexecutor() -> QtExecutor&;
+    static auto get_executor() -> QtExecutor&;
 
     enum class Status
     {
@@ -40,7 +42,6 @@ public:
     auto data() const -> const QVariant&;
     auto data() -> QVariant&;
 
-    auto qexecutor() const -> QtExecutor&;
     auto pool_executor() const -> asio::thread_pool::executor_type;
     auto status() const -> Status;
     auto bindableStatus() -> QBindable<Status>;
@@ -49,7 +50,7 @@ public:
     auto error() const -> const QString&;
     auto bindableError() -> QBindable<QString>;
     bool forwardError() const;
-    auto get_executor() -> QtExecutor&;
+
     auto use_queue() const -> bool;
     void set_use_queue(bool);
 

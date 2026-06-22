@@ -139,7 +139,7 @@ void QAsyncResult::initEx(QtExecutor qex, asio::thread_pool::executor_type pex,
 }
 void QAsyncResult::dropEx() { global_ex().take(); }
 
-auto QAsyncResult::qexecutor() const -> QtExecutor& { return global_ex()->qex; }
+auto QAsyncResult::qexecutor() -> QtExecutor& { return global_ex()->qex; }
 
 auto QAsyncResult::pool_executor() const -> asio::thread_pool::executor_type {
     return global_ex()->pex;
@@ -206,7 +206,6 @@ void QAsyncResult::cancel() {
     d->m_wdog.cancel();
 }
 auto QAsyncResult::get_executor() -> QtExecutor& {
-    Q_D(QAsyncResult);
     return qexecutor();
 }
 auto QAsyncResult::use_queue() const -> bool {
