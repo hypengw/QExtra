@@ -1,4 +1,4 @@
-find_package(Qt6 REQUIRED COMPONENTS Quick ProtobufQuick ProtobufWellKnownTypes)
+find_package(Qt6 REQUIRED COMPONENTS Quick Network ProtobufQuick ProtobufWellKnownTypes)
 
 add_library(qt STATIC)
 add_library(qextra STATIC src/asio/context.cpp)
@@ -25,6 +25,7 @@ target_sources(
          src/helper.cppm
          src/bindable.cppm
          src/global_static.cppm
+         src/qml_network.cppm
          src/query.cppm
          src/select_storage.cppm
          src/asio/mod.cppm
@@ -51,6 +52,7 @@ split_moc_files(
 
 target_sources(qextra PRIVATE src/async.cpp
          src/global_static.cpp
+         src/qml_network.cpp
          src/query.cpp
          src/select_storage.cpp
          src/asio/mod.cpp
@@ -68,7 +70,7 @@ target_compile_features(qt PUBLIC cxx_std_20)
 target_link_libraries(qt PUBLIC Qt6::Core Qt6::Quick)
 
 target_compile_features(qextra PUBLIC cxx_std_20)
-target_link_libraries(qextra PUBLIC qt ncrequest)
+target_link_libraries(qextra PUBLIC qt ncrequest PRIVATE Qt6::Network)
 target_include_directories(qextra PUBLIC include)
 
 option(QEXTRA_BUILD_TESTS "Build qextra tests" OFF)

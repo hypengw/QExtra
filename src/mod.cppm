@@ -5,6 +5,7 @@ export import :helper;
 export import :async;
 export import :bindable;
 export import :global_static;
+export import :qml_network;
 export import :query;
 export import :select_storage;
 export import qt;
