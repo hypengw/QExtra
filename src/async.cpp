@@ -1,97 +1,104 @@
 module;
-#include "QExtra/macro_qt.hpp"
 #include "QExtra/async.moc.h"
-#undef assert
-#include <rstd/macro.hpp>
-module qextra;
-import :bindable;
-import :async;
-import asio;
+#include "QExtra/macro_qt.hpp"
 
-struct GlobalEx {
-    QtExecutor                       qex;
-    asio::thread_pool::executor_type pex;
-    void (*cb)(QStringView);
+module qextra;
+import :async;
+import :bindable;
+import rstd.cppstd;
+
+using CancelSender = rstd::async::oneshot::Sender<rstd::empty>;
+
+template<typename T>
+class AbortOnDrop {
+public:
+    using Output = typename rstd::async::JoinHandle<T>::Output;
+
+    explicit AbortOnDrop(rstd::async::JoinHandle<T> handle)
+        : m_handle(rstd::move(handle)), m_active(true) {}
+
+    AbortOnDrop(const AbortOnDrop&)            = delete;
+    AbortOnDrop& operator=(const AbortOnDrop&) = delete;
+    AbortOnDrop(AbortOnDrop&& other) noexcept
+        : m_handle(rstd::move(other.m_handle)), m_active(rstd::exchange(other.m_active, false)) {}
+
+    AbortOnDrop& operator=(AbortOnDrop&& other) noexcept {
+        if (this != &other) {
+            abort();
+            m_handle = rstd::move(other.m_handle);
+            m_active = rstd::exchange(other.m_active, false);
+        }
+        return *this;
+    }
+
+    ~AbortOnDrop() { abort(); }
+
+    auto poll(rstd::mut_ref<AbortOnDrop> self, rstd::task::Context& context)
+        -> rstd::task::Poll<Output> {
+        return rstd::future::poll(self->m_handle, context);
+    }
+
+private:
+    void abort() {
+        if (m_active && ! m_handle.is_finished()) m_handle.abort();
+        m_active = false;
+    }
+
+    rstd::async::JoinHandle<T> m_handle;
+    bool                       m_active;
 };
 
-auto global_ex(rstd::Option<GlobalEx> in = {}) -> rstd::Option<GlobalEx>& {
-    static rstd::Option<GlobalEx> the { rstd::move(in) };
-    return the;
+struct GlobalEx {
+    rstd::async::AnyExecutor qex;
+    rstd::async::Runtime     runtime;
+    void (*error_callback)(QStringView);
+};
+
+auto global_ex() -> std::optional<GlobalEx>& {
+    static std::optional<GlobalEx> value;
+    return value;
 }
 
 class QAsyncResultPrivate {
 public:
     using Status = QAsyncResult::Status;
-    QAsyncResultPrivate(QAsyncResult* p)
-        : m_p(p),
+
+    explicit QAsyncResultPrivate(QAsyncResult* parent)
+        : m_p(parent),
           m_forward_error(true),
           m_data(QVariant::fromValue(nullptr)),
           m_use_queue(false),
           m_queue_exec_mark(false),
-          m_querying(false, p),
-          m_status(Status::Uninitialized, p),
-          m_error(p) {}
-    QAsyncResult*            m_p;
-    bool                     m_forward_error;
-    QVariant                 m_data;
+          m_querying(false, parent),
+          m_status(Status::Uninitialized, parent),
+          m_error(parent) {}
+
+    QAsyncResult*         m_p;
+    bool                  m_forward_error;
+    QVariant              m_data;
     std::function<void()> m_cb;
 
-    WatchDog                                       m_wdog;
     std::map<QString, QObject*, std::less<>> m_hold;
+    std::optional<CancelSender>              m_cancel;
+    quint64                                  m_generation { 0 };
 
     bool m_use_queue;
     bool m_queue_exec_mark;
-    std::deque<std::tuple<std::function<asio::awaitable<void>()>, std::source_location>>
+    std::deque<std::tuple<std::function<qextra::prelude::task<void>()>, std::source_location>>
         m_queue;
 
-    ObjectBindableProperty<QAsyncResult, bool, &QAsyncResult ::queryingChanged> m_querying;
-    ObjectBindableProperty<QAsyncResult, Status, &QAsyncResult ::statusChanged> m_status;
-    ObjectBindableProperty<QAsyncResult, QString, &QAsyncResult::errorChanged>  m_error;
+    ObjectBindableProperty<QAsyncResult, bool, &QAsyncResult::queryingChanged> m_querying;
+    ObjectBindableProperty<QAsyncResult, Status, &QAsyncResult::statusChanged> m_status;
+    ObjectBindableProperty<QAsyncResult, QString, &QAsyncResult::errorChanged> m_error;
 
     void try_run() {
         if (m_queue.empty() || m_queue_exec_mark || ! m_use_queue) return;
 
-        auto [f, loc] = m_queue.front();
+        auto [work, loc] = rstd::move(m_queue.front());
         m_queue.pop_front();
-
-        auto                   ex = asio::make_strand(m_p->pool_executor());
-        QWatcher<QAsyncResult> self { m_p };
-        auto                   main_ex { m_p->get_executor() };
-        auto                   alloc = asio::recycling_allocator<void>();
-
-        m_p->setStatus(Status::Querying);
         m_queue_exec_mark = true;
-        asio::co_spawn(ex,
-                       m_p->watch_dog().watch(
-                           ex,
-                           [f = std::move(f)]() -> asio::awaitable<void> {
-                               co_await f();
-                           },
-                           asio::chrono::minutes(3),
-                           alloc),
-                       asio::bind_allocator(alloc, [self, main_ex, loc](std::exception_ptr p) {
-                           if (p) {
-                               try {
-                                   std::rethrow_exception(p);
-                               } catch (const std::exception& e) {
-                                   std::string e_str = e.what();
-                                   asio::post(main_ex, [self, e_str]() {
-                                       if (self) {
-                                           self->setError(QString::fromStdString(e_str));
-                                           self->setStatus(Status::Error);
-                                       }
-                                   });
-                                   qCritical() << loc.file_name();
-                                   qCritical() << e_str;
-                               }
-                           }
-
-                           asio::post(main_ex, [self] {
-                               if (self) {
-                                   self->d_func()->handle_queue();
-                               }
-                           });
-                       }));
+        m_p->setStatus(Status::Querying);
+        m_p->start(qextra::detail::own_task(rstd::move(work)), loc, true);
     }
 
     void handle_queue() {
@@ -100,16 +107,30 @@ public:
     }
 };
 
+template<typename Finish>
+auto monitor_task(AbortOnDrop<void> work, rstd::async::oneshot::Receiver<rstd::empty> cancellation,
+                  rstd::async::AnyExecutor qt, Finish finish) -> qextra::prelude::task<void> {
+    auto outcome = co_await rstd::async::select(
+        rstd::async::timeout(rstd::move(work), rstd::time::Duration::from_secs(180)),
+        rstd::move(cancellation));
+
+    if (! co_await qt) co_return;
+    finish(rstd::move(outcome));
+}
+
 QAsyncResult::QAsyncResult(QObject* parent): QObject(parent), d_ptr(new QAsyncResultPrivate(this)) {
     Q_D(QAsyncResult);
-    connect(this, &QAsyncResult::statusChanged, this, [this](Status s) {
-        if (s == Status::Finished) {
+    connect(this, &QAsyncResult::statusChanged, this, [this](Status status) {
+        if (status == Status::Finished) {
             finished();
-        } else if (s == Status::Error) {
+        } else if (status == Status::Error) {
             errorOccurred(error());
         }
-        if (forwardError() && s == Status::Error) {
-            global_ex()->cb(error());
+        if (forwardError() && status == Status::Error) {
+            auto& global = global_ex();
+            if (global && global->error_callback != nullptr) {
+                global->error_callback(error());
+            }
         }
     });
 
@@ -118,108 +139,117 @@ QAsyncResult::QAsyncResult(QObject* parent): QObject(parent), d_ptr(new QAsyncRe
     });
 }
 
-QAsyncResult::~QAsyncResult() {}
+QAsyncResult::~QAsyncResult() { cancel(); }
 
-void QAsyncResult::hold(QStringView name, QObject* o) {
+void QAsyncResult::hold(QStringView name, QObject* object) {
     Q_D(QAsyncResult);
-    if (o != nullptr) {
-        o->setParent(this);
-        if (auto it = d->m_hold.find(name); it != d->m_hold.end()) {
-            it->second->deleteLater();
-            it->second = o;
-        } else {
-            d->m_hold.insert({ name.toString(), o });
-        }
+    if (object == nullptr) return;
+
+    object->setParent(this);
+    if (auto it = d->m_hold.find(name); it != d->m_hold.end()) {
+        it->second->deleteLater();
+        it->second = object;
+    } else {
+        d->m_hold.insert({ name.toString(), object });
     }
 }
 
-void QAsyncResult::initEx(QtExecutor qex, asio::thread_pool::executor_type pex,
-                          void (*cb)(QStringView)) {
-    global_ex(rstd::Some(GlobalEx { qex, pex, cb }));
+void QAsyncResult::initEx(QObject* qt_target, usize worker_threads,
+                          void (*error_callback)(QStringView)) {
+    auto runtime = rstd::async::RuntimeBuilder::multi_thread()
+                       .worker_threads(worker_threads)
+                       .enable_all()
+                       .build()
+                       .unwrap();
+    global_ex().emplace(GlobalEx {
+        rstd::async::AnyExecutor::from_executor(QtExecutor { qt_target }),
+        rstd::move(runtime),
+        error_callback,
+    });
 }
-void QAsyncResult::dropEx() { global_ex().take(); }
 
-auto QAsyncResult::qexecutor() -> QtExecutor& { return global_ex()->qex; }
+void QAsyncResult::dropEx() { global_ex().reset(); }
 
-auto QAsyncResult::pool_executor() const -> asio::thread_pool::executor_type {
-    return global_ex()->pex;
-}
+auto QAsyncResult::qexecutor() -> rstd::async::AnyExecutor { return global_ex()->qex.clone(); }
 
 auto QAsyncResult::status() const -> Status {
     Q_D(const QAsyncResult);
     return d->m_status.value();
 }
+
 auto QAsyncResult::bindableStatus() -> QBindable<Status> {
     Q_D(QAsyncResult);
     return &(d->m_status);
 }
+
 auto QAsyncResult::querying() const -> bool {
     Q_D(const QAsyncResult);
     return d->m_querying.value();
 }
+
 auto QAsyncResult::bindableQuerying() -> QBindable<bool> {
     Q_D(QAsyncResult);
     return &(d->m_querying);
 }
 
-void QAsyncResult::setStatus(Status v) {
+void QAsyncResult::setStatus(Status value) {
     Q_D(QAsyncResult);
-    d->m_status = v;
+    d->m_status = value;
 }
+
 void QAsyncResult::reload() {
     Q_D(const QAsyncResult);
-    if (d->m_cb) {
-        d->m_cb();
-    }
+    if (d->m_cb) d->m_cb();
 }
-void QAsyncResult::set_reload_callback(const std::function<void()>& f) {
+
+void QAsyncResult::set_reload_callback(const std::function<void()>& callback) {
     Q_D(QAsyncResult);
-    d->m_cb = f;
+    d->m_cb = callback;
 }
 
 auto QAsyncResult::error() const -> const QString& {
     Q_D(const QAsyncResult);
     return d->m_error.value();
 }
+
 auto QAsyncResult::bindableError() -> QBindable<QString> {
     Q_D(QAsyncResult);
     return &(d->m_error);
 }
-void QAsyncResult::setError(const QString& v) {
+
+void QAsyncResult::setError(const QString& value) {
     Q_D(QAsyncResult);
-    d->m_error = v;
+    d->m_error = value;
 }
 
 bool QAsyncResult::forwardError() const {
     Q_D(const QAsyncResult);
     return d->m_forward_error;
 }
-void QAsyncResult::setForwardError(bool v) {
+
+void QAsyncResult::setForwardError(bool value) {
     Q_D(QAsyncResult);
-    if (d->m_forward_error != v) {
-        d->m_forward_error = v;
-        emit forwardErrorChanged();
-    }
+    if (d->m_forward_error == value) return;
+    d->m_forward_error = value;
+    emit forwardErrorChanged();
 }
+
 void QAsyncResult::cancel() {
     Q_D(QAsyncResult);
-    d->m_wdog.cancel();
+    if (d->m_cancel) {
+        (void)d->m_cancel->send(rstd::empty {});
+        d->m_cancel.reset();
+    }
 }
-auto QAsyncResult::get_executor() -> QtExecutor& {
-    return qexecutor();
-}
+
 auto QAsyncResult::use_queue() const -> bool {
     Q_D(const QAsyncResult);
     return d->m_use_queue;
 }
-void QAsyncResult::set_use_queue(bool v) {
-    Q_D(QAsyncResult);
-    d->m_use_queue = v;
-}
 
-auto QAsyncResult::watch_dog() -> WatchDog& {
+void QAsyncResult::set_use_queue(bool value) {
     Q_D(QAsyncResult);
-    return d->m_wdog;
+    d->m_use_queue = value;
 }
 
 auto QAsyncResult::data() const -> const QVariant& {
@@ -232,29 +262,59 @@ auto QAsyncResult::data() -> QVariant& {
     return d->m_data;
 }
 
-void QAsyncResult::set_data(const QVariant& v) {
+void QAsyncResult::set_data(const QVariant& value) {
     Q_D(QAsyncResult);
-    if (d->m_data != v) {
-        d->m_data = v;
+    if (d->m_data != value) {
+        d->m_data = value;
         dataChanged();
     }
-    if (auto obj = d->m_data.value<QObject*>(); obj != nullptr) {
-        if (obj->parent() != this) {
-            obj->setParent(this);
-        }
+    if (auto* object = d->m_data.value<QObject*>(); object != nullptr && object->parent() != this) {
+        object->setParent(this);
     }
 }
-void QAsyncResult::push(std::function<asio::awaitable<void>()> in,
-                        const std::source_location&         loc) {
-    Q_D(QAsyncResult);
-    d->m_queue.emplace_back(in, loc);
 
+void QAsyncResult::push(std::function<qextra::prelude::task<void>()> work,
+                        const std::source_location&                  loc) {
+    Q_D(QAsyncResult);
+    d->m_queue.emplace_back(rstd::move(work), loc);
     d->try_run();
 }
 
-usize QAsyncResult::size() const {
-    Q_D(const QAsyncResult);
-    return d->m_queue.size();
+void QAsyncResult::start(qextra::prelude::task<void> work, const std::source_location& loc,
+                         bool queued) {
+    Q_D(QAsyncResult);
+    cancel();
+
+    auto channel      = rstd::async::oneshot::channel<rstd::empty>();
+    auto cancellation = rstd::move(channel.get<1>());
+    d->m_cancel.emplace(rstd::move(channel.get<0>()));
+    auto generation  = ++d->m_generation;
+    auto self        = QWatcher<QAsyncResult> { this };
+    auto qt          = qexecutor();
+    auto work_handle = AbortOnDrop<void> { global_ex()->runtime.spawn(rstd::move(work)) };
+
+    auto finish = [self, generation, queued, loc](auto outcome) mutable {
+        if (! self) return;
+
+        auto* state = self->d_func();
+        if (state->m_generation == generation) {
+            state->m_cancel.reset();
+        }
+
+        if (outcome.is_left()) {
+            auto timed = rstd::move(outcome).unwrap_left();
+            if (timed.is_err()) {
+                self->setError(QStringLiteral("Operation timed out"));
+                self->setStatus(Status::Error);
+                qCritical() << loc.file_name() << "Operation timed out";
+            }
+        }
+
+        if (queued) state->handle_queue();
+    };
+
+    (void)global_ex()->runtime.spawn(monitor_task(
+        rstd::move(work_handle), rstd::move(cancellation), rstd::move(qt), rstd::move(finish)));
 }
 
 #include "QExtra/async.moc.cpp"

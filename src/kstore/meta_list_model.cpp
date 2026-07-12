@@ -1,8 +1,8 @@
 #include "kstore/qt/meta_list_model.hpp"
 
-#include <algorithm>
-
 #include <QMetaProperty>
+
+import rstd.cppstd;
 
 namespace kstore
 {

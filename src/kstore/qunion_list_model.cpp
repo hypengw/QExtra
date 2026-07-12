@@ -1,6 +1,6 @@
 #include "kstore/qt/qunion_list_model.hpp"
 
-#include <algorithm>
+import rstd.cppstd;
 
 namespace kstore
 {

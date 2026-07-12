@@ -9,7 +9,7 @@ if(NOT GTest_FOUND)
   FetchContent_MakeAvailable(googletest)
 endif()
 
-add_executable(qextra_test store.cpp)
+add_executable(qextra_test async.cpp store.cpp)
 target_link_libraries(qextra_test PRIVATE qextra GTest::gtest_main)
 target_compile_features(qextra_test PRIVATE cxx_std_23)
 set_target_properties(qextra_test PROPERTIES AUTOMOC ON)

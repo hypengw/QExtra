@@ -7,6 +7,7 @@ module;
 
 export module qextra:query;
 export import :async;
+import rstd.cppstd;
 
 export class Query : public QAsyncResult {
     Q_OBJECT

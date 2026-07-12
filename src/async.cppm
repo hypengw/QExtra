@@ -4,13 +4,36 @@ module;
 #ifdef Q_MOC_RUN
 #    include "QExtra/async.moc"
 #endif
+
 export module qextra:async;
-export import :asio;
+export import :executor;
+export import :task;
+export import :watcher;
 export import qt;
+export import rstd.cppstd;
 
 using namespace rstd::prelude;
 
+namespace qextra::detail
+{
+template<typename E>
+auto error_string(E&& error) -> QString {
+    if constexpr (std::same_as<std::remove_cvref_t<E>, QString>) {
+        return std::forward<E>(error);
+    } else {
+        auto text = rstd::format("{}", std::forward<E>(error));
+        return QString::fromUtf8(reinterpret_cast<const char*>(text.data()), text.size());
+    }
+}
+
+template<typename Fn>
+auto own_task(Fn fn) -> qextra::prelude::task<void> {
+    co_await fn();
+}
+} // namespace qextra::detail
+
 class QAsyncResultPrivate;
+
 export class QAsyncResult : public QObject {
     Q_OBJECT
 
@@ -21,14 +44,14 @@ export class QAsyncResult : public QObject {
     Q_PROPERTY(QVariant data READ data NOTIFY dataChanged)
     Q_PROPERTY(
         bool forwardError READ forwardError WRITE setForwardError NOTIFY forwardErrorChanged FINAL)
+
 public:
     QAsyncResult(QObject* parent = nullptr);
     virtual ~QAsyncResult();
 
-    static void initEx(QtExecutor, asio::thread_pool::executor_type, void(*)(QStringView));
+    static void initEx(QObject* qt_target, usize worker_threads, void (*)(QStringView));
     static void dropEx();
-    static auto qexecutor() -> QtExecutor&;
-    static auto get_executor() -> QtExecutor&;
+    static auto qexecutor() -> rstd::async::AnyExecutor;
 
     enum class Status
     {
@@ -42,7 +65,6 @@ public:
     auto data() const -> const QVariant&;
     auto data() -> QVariant&;
 
-    auto pool_executor() const -> asio::thread_pool::executor_type;
     auto status() const -> Status;
     auto bindableStatus() -> QBindable<Status>;
     auto querying() const -> bool;
@@ -63,8 +85,7 @@ public:
     template<typename T, typename TE>
     void from(const Result<T, TE>& exp) {
         if (exp) {
-            if constexpr (std::is_base_of_v<QObject,
-                                               std::decay_t<std::remove_pointer_t<T>>> &&
+            if constexpr (std::is_base_of_v<QObject, std::decay_t<std::remove_pointer_t<T>>> &&
                           std::is_pointer_v<T>) {
                 set_data(exp.value());
             } else {
@@ -101,10 +122,8 @@ public:
     }
 
 private:
-    void  push(std::function<asio::awaitable<void>()>, const std::source_location& loc);
-    usize size() const;
-
-    auto watch_dog() -> WatchDog&;
+    void push(std::function<qextra::prelude::task<void>()>, const std::source_location& loc);
+    void start(qextra::prelude::task<void>, const std::source_location& loc, bool queued);
 
     QScopedPointer<QAsyncResultPrivate> d_ptr;
     Q_DECLARE_PRIVATE(QAsyncResult)
@@ -148,7 +167,7 @@ public:
             set_tdata(*res);
             self->setStatus(QAsyncResult::Status::Finished);
         } else {
-            self->setError(rstd::into(rstd::format("{}", res.unwrap_err_unchecked())));
+            self->setError(qextra::detail::error_string(res.unwrap_err_unchecked()));
             self->setStatus(QAsyncResult::Status::Error);
         }
     }
@@ -160,7 +179,7 @@ public:
             res.inspect(std::forward<F>(f));
             self->setStatus(QAsyncResult::Status::Finished);
         } else {
-            self->setError(rstd::into(rstd::format("{}", res.unwrap_err_unchecked())));
+            self->setError(qextra::detail::error_string(res.unwrap_err_unchecked()));
             self->setStatus(QAsyncResult::Status::Error);
         }
     }
@@ -168,29 +187,9 @@ public:
 
 template<typename Fn>
 void QAsyncResult::spawn(Fn&& f, const std::source_location loc) {
-    QWatcher<QAsyncResult> self { this };
-    auto                   main_ex { get_executor() };
-    auto                   ex    = asio::make_strand(pool_executor());
-    auto                   alloc = asio::recycling_allocator<void>();
     if (use_queue()) {
-        push(f, loc);
+        push(std::forward<Fn>(f), loc);
     } else {
-        asio::co_spawn(
-            ex,
-            watch_dog().watch(ex, std::forward<Fn>(f), asio::chrono::minutes(3), alloc),
-            asio::bind_allocator(alloc, [self, main_ex, loc](std::exception_ptr p) {
-                handle_asio_exception(
-                    p,
-                    [main_ex, self](std::string_view error) {
-                        auto e_str = std::string(error);
-                        asio::post(main_ex, [self, e_str]() {
-                            if (self) {
-                                self->setError(QString::fromStdString(e_str));
-                                self->setStatus(Status::Error);
-                            }
-                        });
-                    },
-                    loc);
-            }));
+        start(qextra::detail::own_task(std::forward<Fn>(f)), loc, false);
     }
 }

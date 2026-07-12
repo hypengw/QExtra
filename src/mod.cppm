@@ -1,5 +1,7 @@
 export module qextra;
-export import :asio;
+export import :task;
+export import :executor;
+export import :watcher;
 export import :kstore;
 export import :helper;
 export import :async;

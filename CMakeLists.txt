@@ -1,7 +1,7 @@
 find_package(Qt6 REQUIRED COMPONENTS Quick Network ProtobufQuick ProtobufWellKnownTypes)
 
 add_library(qt STATIC)
-add_library(qextra STATIC src/asio/context.cpp)
+add_library(qextra STATIC)
 
 target_sources(
   qt
@@ -28,13 +28,9 @@ target_sources(
          src/qml_network.cppm
          src/query.cppm
          src/select_storage.cppm
-         src/asio/mod.cppm
-         src/asio/task.cppm
-         src/asio/forward.cppm
-         src/asio/context.cppm
-         src/asio/executor.cppm
-         src/asio/watcher.cppm
-         src/asio/watch_dog.cppm
+         src/task.cppm
+         src/executor.cppm
+         src/watcher.cppm
          )
 
 set_target_properties(qextra PROPERTIES AUTOMOC ON)
@@ -55,7 +51,6 @@ target_sources(qextra PRIVATE src/async.cpp
          src/qml_network.cpp
          src/query.cpp
          src/select_storage.cpp
-         src/asio/mod.cpp
          src/kstore/share_store.cpp
          src/kstore/moc.cpp
          src/kstore/meta_role.cpp
@@ -70,7 +65,7 @@ target_compile_features(qt PUBLIC cxx_std_20)
 target_link_libraries(qt PUBLIC Qt6::Core Qt6::Quick)
 
 target_compile_features(qextra PUBLIC cxx_std_20)
-target_link_libraries(qextra PUBLIC qt ncrequest PRIVATE Qt6::Network)
+target_link_libraries(qextra PUBLIC qt ncrequest rstd::rstd rstd.cppstd PRIVATE Qt6::Network)
 target_include_directories(qextra PUBLIC include)
 
 option(QEXTRA_BUILD_TESTS "Build qextra tests" OFF)
