@@ -9,45 +9,6 @@ import rstd.cppstd;
 
 using CancelSender = rstd::async::oneshot::Sender<rstd::empty>;
 
-template<typename T>
-class AbortOnDrop {
-public:
-    using Output = typename rstd::async::JoinHandle<T>::Output;
-
-    explicit AbortOnDrop(rstd::async::JoinHandle<T> handle)
-        : m_handle(rstd::move(handle)), m_active(true) {}
-
-    AbortOnDrop(const AbortOnDrop&)            = delete;
-    AbortOnDrop& operator=(const AbortOnDrop&) = delete;
-    AbortOnDrop(AbortOnDrop&& other) noexcept
-        : m_handle(rstd::move(other.m_handle)), m_active(rstd::exchange(other.m_active, false)) {}
-
-    AbortOnDrop& operator=(AbortOnDrop&& other) noexcept {
-        if (this != &other) {
-            abort();
-            m_handle = rstd::move(other.m_handle);
-            m_active = rstd::exchange(other.m_active, false);
-        }
-        return *this;
-    }
-
-    ~AbortOnDrop() { abort(); }
-
-    auto poll(rstd::mut_ref<AbortOnDrop> self, rstd::task::Context& context)
-        -> rstd::task::Poll<Output> {
-        return rstd::future::poll(self->m_handle, context);
-    }
-
-private:
-    void abort() {
-        if (m_active && ! m_handle.is_finished()) m_handle.abort();
-        m_active = false;
-    }
-
-    rstd::async::JoinHandle<T> m_handle;
-    bool                       m_active;
-};
-
 struct GlobalEx {
     rstd::async::AnyExecutor qex;
     rstd::async::Runtime     runtime;
@@ -108,7 +69,8 @@ public:
 };
 
 template<typename Finish>
-auto monitor_task(AbortOnDrop<void> work, rstd::async::oneshot::Receiver<rstd::empty> cancellation,
+auto monitor_task(rstd::async::AbortOnDropHandle<void>        work,
+                  rstd::async::oneshot::Receiver<rstd::empty> cancellation,
                   rstd::async::AnyExecutor qt, Finish finish) -> qextra::prelude::task<void> {
     auto outcome = co_await rstd::async::select(
         rstd::async::timeout(rstd::move(work), rstd::time::Duration::from_secs(180)),
@@ -288,10 +250,11 @@ void QAsyncResult::start(qextra::prelude::task<void> work, const std::source_loc
     auto channel      = rstd::async::oneshot::channel<rstd::empty>();
     auto cancellation = rstd::move(channel.get<1>());
     d->m_cancel.emplace(rstd::move(channel.get<0>()));
-    auto generation  = ++d->m_generation;
-    auto self        = QWatcher<QAsyncResult> { this };
-    auto qt          = qexecutor();
-    auto work_handle = AbortOnDrop<void> { global_ex()->runtime.spawn(rstd::move(work)) };
+    auto generation = ++d->m_generation;
+    auto self       = QWatcher<QAsyncResult> { this };
+    auto qt         = qexecutor();
+    auto work_handle =
+        rstd::async::AbortOnDropHandle<void> { global_ex()->runtime.spawn(rstd::move(work)) };
 
     auto finish = [self, generation, queued, loc](auto outcome) mutable {
         if (! self) return;
