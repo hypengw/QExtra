@@ -59,7 +59,7 @@ public:
         m_queue.pop_front();
         m_queue_exec_mark = true;
         m_p->setStatus(Status::Querying);
-        m_p->start(qextra::detail::own_task(rstd::move(work)), loc, true);
+        m_p->start(qextra::own_task(rstd::move(work)), loc, true);
     }
 
     void handle_queue() {
@@ -73,7 +73,7 @@ auto monitor_task(rstd::async::AbortOnDropHandle<void>        work,
                   rstd::async::oneshot::Receiver<rstd::empty> cancellation,
                   rstd::async::AnyExecutor qt, Finish finish) -> qextra::prelude::task<void> {
     auto outcome = co_await rstd::async::select(
-        rstd::async::timeout(rstd::move(work), rstd::time::Duration::from_secs(180)),
+        rstd::async::timeout(rstd::move(work), rstd::time::Duration::from_secs(rstd::u64(180))),
         rstd::move(cancellation));
 
     if (! co_await qt) co_return;
@@ -133,6 +133,10 @@ void QAsyncResult::initEx(QObject* qt_target, usize worker_threads,
 void QAsyncResult::dropEx() { global_ex().reset(); }
 
 auto QAsyncResult::qexecutor() -> rstd::async::AnyExecutor { return global_ex()->qex.clone(); }
+
+auto QAsyncResult::runtime_handle() -> rstd::async::RuntimeHandle {
+    return global_ex()->runtime.handle();
+}
 
 auto QAsyncResult::status() const -> Status {
     Q_D(const QAsyncResult);

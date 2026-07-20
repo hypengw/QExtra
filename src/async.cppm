@@ -1,4 +1,5 @@
 module;
+#include <vector>
 #include "QExtra/macro_qt.hpp"
 
 #ifdef Q_MOC_RUN
@@ -14,6 +15,14 @@ export import rstd.cppstd;
 
 using namespace rstd::prelude;
 
+export namespace qextra
+{
+template<typename Fn>
+auto own_task(Fn fn) -> qextra::prelude::task<void> {
+    co_await fn();
+}
+} // namespace qextra
+
 namespace qextra::detail
 {
 template<typename E>
@@ -22,14 +31,12 @@ auto error_string(E&& error) -> QString {
         return std::forward<E>(error);
     } else {
         auto text = rstd::format("{}", std::forward<E>(error));
-        return QString::fromUtf8(reinterpret_cast<const char*>(text.data()), text.size());
+        return QString::fromUtf8(
+            reinterpret_cast<const char*>(text.data()),
+            static_cast<decltype(QString {}.size())>(text.size().to_primitive()));
     }
 }
 
-template<typename Fn>
-auto own_task(Fn fn) -> qextra::prelude::task<void> {
-    co_await fn();
-}
 } // namespace qextra::detail
 
 class QAsyncResultPrivate;
@@ -52,6 +59,7 @@ public:
     static void initEx(QObject* qt_target, usize worker_threads, void (*)(QStringView));
     static void dropEx();
     static auto qexecutor() -> rstd::async::AnyExecutor;
+    static auto runtime_handle() -> rstd::async::RuntimeHandle;
 
     enum class Status
     {
@@ -190,6 +198,28 @@ void QAsyncResult::spawn(Fn&& f, const std::source_location loc) {
     if (use_queue()) {
         push(std::forward<Fn>(f), loc);
     } else {
-        start(qextra::detail::own_task(std::forward<Fn>(f)), loc, false);
+        start(qextra::own_task(std::forward<Fn>(f)), loc, false);
     }
 }
+
+export class QAsyncScope {
+public:
+    QAsyncScope()                              = default;
+    QAsyncScope(const QAsyncScope&)            = delete;
+    QAsyncScope& operator=(const QAsyncScope&) = delete;
+    ~QAsyncScope() { cancel(); }
+
+    template<typename Fn>
+    void spawn(Fn&& fn) {
+        std::erase_if(m_tasks, [](const auto& task) {
+            return task.is_finished();
+        });
+        m_tasks.emplace_back(
+            QAsyncResult::runtime_handle().spawn(qextra::own_task(std::forward<Fn>(fn))));
+    }
+
+    void cancel() { m_tasks.clear(); }
+
+private:
+    std::vector<rstd::async::AbortOnDropHandle<void>> m_tasks;
+};

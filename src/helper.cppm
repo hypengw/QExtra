@@ -135,38 +135,47 @@ struct Convert<QVariant, std::optional<T>> {
 
 */
 
-template<>
+export namespace qextra
+{
+inline auto to_qstring(const rstd::string::String& str) -> QString {
+    return QString::fromUtf8(
+        str.data(), static_cast<decltype(QString {}.size())>(str.size().to_primitive()));
+}
+} // namespace qextra
+
+export template<>
 struct rstd::Impl<rstd::fmt::Display, QString> : rstd::ImplBase<QString> {
     auto fmt(rstd::fmt::Formatter& f) const -> bool {
         auto str = this->self().toStdString();
-        return f.write_raw((const u8*)str.data(), str.size());
+        return f.write_raw(str.data(), rstd::size_t(str.size()));
     }
 };
 
-template<>
+export template<>
 struct rstd::Impl<rstd::fmt::Display, QStringView> : rstd::ImplBase<QStringView> {
     auto fmt(rstd::fmt::Formatter& f) const -> bool {
         auto str = this->self().toString().toStdString();
-        return f.write_raw((const u8*)str.data(), str.size());
+        return f.write_raw(str.data(), rstd::size_t(str.size()));
     }
 };
 
-template<>
+export template<>
 struct rstd::Impl<rstd::fmt::Display, QLatin1String> : rstd::ImplBase<QLatin1String> {
     auto fmt(rstd::fmt::Formatter& f) const -> bool {
         auto str = this->self().toString().toStdString();
-        return f.write_raw((const u8*)str.data(), str.size());
+        return f.write_raw(str.data(), rstd::size_t(str.size()));
     }
 };
 
-template<>
+export template<>
 struct rstd::Impl<rstd::fmt::Display, QUtf8StringView> : rstd::ImplBase<QUtf8StringView> {
     auto fmt(rstd::fmt::Formatter& f) const -> bool {
-        return f.write_raw((const u8*)this->self().data(), this->self().size());
+        return f.write_raw(
+            this->self().data(), rstd::size_t(static_cast<std::size_t>(this->self().size())));
     }
 };
 
-template<>
+export template<>
 struct rstd::Impl<rstd::fmt::Display, QAnyStringView> : rstd::ImplBase<QAnyStringView> {
     auto fmt(rstd::fmt::Formatter& f) const -> bool {
         bool out;
@@ -177,30 +186,30 @@ struct rstd::Impl<rstd::fmt::Display, QAnyStringView> : rstd::ImplBase<QAnyStrin
     }
 };
 
-template<>
+export template<>
 struct rstd::Impl<rstd::convert::From<rstd::string::String>, QString> {
     static auto from(const rstd::string::String& str) {
-        return QString::fromUtf8(str.data(), str.size());
+        return qextra::to_qstring(str);
     }
 };
-template<>
+export template<>
 struct rstd::Impl<rstd::convert::From<std::string>, QString> {
     static auto from(std::string str) { return QString::fromStdString(rstd::move(str)); }
 };
-template<>
+export template<>
 struct rstd::Impl<rstd::convert::From<std::string>, QUrl> {
     static auto from(std::string str) { return QString::fromStdString(rstd::move(str)); }
 };
 
-template<>
+export template<>
 struct rstd::Impl<rstd::convert::From<std::string>, QStringView> {
     static auto from(std::string str) { return QString::fromStdString(rstd::move(str)); }
 };
 
-template<>
+export template<>
 struct rstd::Impl<rstd::convert::From<rstd::string::String>, QUrl> {
     static auto from(const rstd::string::String& str) -> QUrl {
-        return QString::fromUtf8(str.data(), str.size());
+        return qextra::to_qstring(str);
     }
 };
 
