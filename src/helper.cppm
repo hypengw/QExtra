@@ -139,7 +139,8 @@ export namespace qextra
 {
 inline auto to_qstring(const rstd::string::String& str) -> QString {
     return QString::fromUtf8(
-        str.data(), static_cast<decltype(QString {}.size())>(str.size().to_primitive()));
+        reinterpret_cast<const char*>(str.data()),
+        static_cast<decltype(QString {}.size())>(str.size().to_primitive()));
 }
 } // namespace qextra
 
