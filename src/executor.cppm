@@ -30,7 +30,3 @@ public:
 private:
     QPointer<QObject> m_target;
 };
-
-template<>
-struct rstd::Impl<rstd::async::Executor, QtExecutor>
-    : rstd::LinkClassMethod<rstd::async::Executor, QtExecutor> {};
