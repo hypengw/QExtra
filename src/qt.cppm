@@ -1,12 +1,17 @@
 module;
+#include <QtCore/QAbstractListModel>
+#include <QtCore/QChar>
+#include <QtCore/QCommandLineParser>
 #include <QtCore/QCoreApplication>
 #include <QtCore/QCryptographicHash>
 #include <QtCore/QDataStream>
+#include <QtCore/QDebug>
 #include <QtCore/QDir>
 #include <QtCore/QEvent>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
 #include <QtCore/QGlobalStatic>
+#include <QtCore/QHash>
 #include <QtCore/QIdentityProxyModel>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
@@ -14,10 +19,15 @@ module;
 #include <QtCore/QJsonParseError>
 #include <QtCore/QJsonValue>
 #include <QtCore/QLibrary>
+#include <QtCore/QLibraryInfo>
+#include <QtCore/QList>
+#include <QtCore/QLocale>
 #include <QtCore/QLoggingCategory>
 #include <QtCore/QObject>
 #include <QtCore/QObjectBindableProperty>
 #include <QtCore/QPluginLoader>
+#include <QtCore/QPointer>
+#include <QtCore/QProcess>
 #include <QtCore/QPropertyData>
 #include <QtCore/QRandomGenerator>
 #include <QtCore/QRegularExpression>
@@ -25,22 +35,42 @@ module;
 #include <QtCore/QSettings>
 #include <QtCore/QSortFilterProxyModel>
 #include <QtCore/QStandardPaths>
+#include <QtCore/QString>
 #include <QtCore/QStringBuilder>
+#include <QtCore/QStringList>
 #include <QtCore/QThread>
 #include <QtCore/QThreadPool>
+#include <QtCore/QTimer>
+#include <QtCore/QTranslator>
 #include <QtCore/QUuid>
+#include <QtCore/QVariant>
+#include <QtCore/QVariantList>
+#include <QtCore/QVariantMap>
+#include <QtCore/qnamespace.h>
+#include <QtCore/qtypes.h>
+
+#include <QtDBus/QDBusConnection>
+#include <QtDBus/QDBusConnectionInterface>
+#include <QtDBus/QDBusInterface>
+#include <QtDBus/QDBusMessage>
+#include <QtDBus/QDBusReply>
+#include <QtDBus/QDBusServiceWatcher>
+#include <QtDBus/QDBusVariant>
 
 #include <QtProtobuf/QProtobufSerializer>
 #include <QtProtobuf/QtProtobuf>
+#include <QtProtobuf/qtprotobuftypes.h>
 
 #include <QtGui/QClipboard>
 #include <QtGui/QColor>
+#include <QtGui/QGuiApplication>
 #include <QtGui/QImageReader>
 #include <QtGui/QImageWriter>
 #include <QtGui/QSurfaceFormat>
 
 #include <QtQml/QJSValueIterator>
 #include <QtQml/QQmlApplicationEngine>
+#include <QtQml/QQmlEngine>
 #include <QtQml/QQmlListProperty>
 #include <QtQml/QQmlParserStatus>
 #include <QtQml/QQmlPropertyMap>
@@ -51,7 +81,6 @@ module;
 #include <QtQuick/QQuickWindow>
 
 #include <QtCore/QApplicationStatic>
-#include <QtQml/QQmlApplicationEngine>
 #include <QtQml/QQmlContext>
 #include <QtQml/QQmlEngineExtensionPlugin>
 
@@ -61,8 +90,8 @@ export using ::qobject_cast;
 export using ::QFlag;
 export using ::QIncompatibleFlag;
 export using ::QFlags;
-export using ::QIncompatibleFlag;
 export using ::QString;
+export using ::QChar;
 export using ::QAnyStringView;
 export using ::QStringView;
 export using ::QUtf8StringView;
@@ -75,6 +104,9 @@ export using ::quint32;
 export using ::qint64;
 export using ::quint64;
 export using ::qlonglong;
+export using ::qulonglong;
+export using ::qreal;
+export using ::qsizetype;
 export using ::QDateTime;
 export using ::qRgb;
 export using ::QColor;
@@ -92,6 +124,7 @@ export using ::QStringList;
 export using ::QByteArray;
 export using ::QByteArrayView;
 export using ::QMessageLogger;
+export using ::QDebug;
 export using ::QScopedPointer;
 export using ::qGetPtrHelper;
 
@@ -122,9 +155,14 @@ export using ::QMetaType;
 export using ::QMetaObject;
 export using ::QObjectBindableProperty;
 export using ::QPluginLoader;
+export using ::QCommandLineOption;
+export using ::QCommandLineParser;
 export using ::QBindable;
 export using ::QStandardPaths;
 export using ::QProcess;
+export using ::QLibraryInfo;
+export using ::QLocale;
+export using ::QTranslator;
 
 export using ::QGuiApplication;
 export using ::QSurfaceFormat;
@@ -135,10 +173,21 @@ export using ::QImageWriter;
 
 export using ::QApplication;
 
+export using ::QDBusConnection;
+export using ::QDBusConnectionInterface;
+export using ::QDBusInterface;
+export using ::QDBusMessage;
+export using ::QDBusReply;
+export using ::QDBusServiceWatcher;
+export using ::QDBusVariant;
+
 export using ::QSettings;
 export using ::QDataStream;
+export using ::operator&;
 export using ::operator<<;
 export using ::operator>>;
+export using ::operator^;
+export using ::operator|;
 
 export using ::QJSValue;
 export using ::QJSValueIterator;
@@ -186,16 +235,25 @@ export using ::QModelIndex;
 export namespace Qt {
 using Qt::AutoConnection;
 using Qt::BlockingQueuedConnection;
+using Qt::CaseInsensitive;
+using Qt::CaseSensitive;
 using Qt::ConnectionType;
 using Qt::DirectConnection;
 using Qt::makePropertyBinding;
 using Qt::QueuedConnection;
+using Qt::SkipEmptyParts;
 using Qt::UniqueConnection;
+using Qt::UserRole;
 } // namespace Qt
 
 export namespace QtPrivate {
 using QtPrivate::QPropertyBindingData;
 }
+
+export namespace QDBus {
+using QDBus::Block;
+using QDBus::CallMode;
+} // namespace QDBus
 
 export namespace QTypeTraits {
 using QTypeTraits::is_dereferenceable;
@@ -217,16 +275,13 @@ export using Qt::StringLiterals::operator""_s;
 } // namespace StringLiterals
 } // namespace Literals
 
-export inline namespace ops {
-Q_DECLARE_OPERATORS_FOR_FLAGS(QRegularExpression::PatternOptions)
-Q_DECLARE_OPERATORS_FOR_FLAGS(QRegularExpression::MatchOptions)
-} // namespace ops
-
 } // namespace Qt
 
 namespace QtProtobuf {
 export using QtProtobuf::int64List;
 export using QtProtobuf::int32;
 export using QtProtobuf::int64;
+export using QtProtobuf::uint32;
+export using QtProtobuf::uint64List;
 } // namespace QtProtobuf
 export using ::QProtobufSerializer;

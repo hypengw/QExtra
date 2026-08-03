@@ -1,4 +1,4 @@
-find_package(Qt6 REQUIRED COMPONENTS Quick Network ProtobufQuick ProtobufWellKnownTypes)
+find_package(Qt6 REQUIRED COMPONENTS DBus Network Protobuf ProtobufQuick ProtobufWellKnownTypes Quick)
 
 add_library(qt STATIC)
 add_library(qextra STATIC)
@@ -62,7 +62,7 @@ target_sources(qextra PRIVATE src/async.cpp
 set_source_files_properties(src/async.cpp src/global_static.cpp src/query.cpp src/kstore/share_store.cpp PROPERTIES SKIP_AUTOMOC ON)
 
 target_compile_features(qt PUBLIC cxx_std_20)
-target_link_libraries(qt PUBLIC Qt6::Core Qt6::Quick)
+target_link_libraries(qt PUBLIC Qt6::Core Qt6::DBus Qt6::Protobuf Qt6::Quick)
 
 target_compile_features(qextra PUBLIC cxx_std_20)
 target_link_libraries(qextra PUBLIC qt ncrequest rstd::rstd rstd.cppstd PRIVATE Qt6::Network)
