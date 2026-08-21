@@ -2,7 +2,7 @@
 name = "qextra"
 version = "0.1.0"
 
-[build-dependencies.lito-qt]
+[dependencies.lito-qt]
 builtin = "qt"
 
 [lib]

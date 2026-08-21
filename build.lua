@@ -1,4 +1,5 @@
-local qt = require("lito.qt")
+local lito = require("@lito")
+local qt = require("@lito.qt")
 
 local qextra = lito.target({ kind = "lib", name = "qextra" })
 local qt6 = lito.external_dependency(qextra, "qt6")
