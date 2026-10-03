@@ -23,6 +23,8 @@ sources = [
   "src/task.cppm",
   "src/executor.cppm",
   "src/watcher.cppm",
+  "src/image/service.cppm",
+  "src/image/image.cpp",
   "src/async.cpp",
   "src/global_static.cpp",
   "src/qml_network.cpp",
@@ -40,18 +42,22 @@ sources = [
 
 [usage]
 public-include-directories = ["include"]
-private-include-directories = ["src"]
+private-include-directories = ["src", "include/QExtra"]
 
 [dependencies.rstd-std]
-version = "0.1.0"
+version = "0.1.5"
 pub = true
 
 [dependencies.rstd-cppstd]
-version = "0.1.0"
+version = "0.1.5"
 pub = true
 
 [dependencies.ncrequest]
 git = "https://github.com/hypengw/ncrequest.git"
+pub = true
+
+[dependencies.wavsen]
+git = "https://github.com/hypengw/wavsen.git"
 pub = true
 
 [external-dependencies.cmake.qt6]
@@ -64,6 +70,8 @@ components = [
   "ProtobufQuick",
   "ProtobufWellKnownTypes",
   "Quick",
+  "QuickPrivate",
+  "GuiPrivate",
   "Qml",
 ]
 targets = [
@@ -71,6 +79,20 @@ targets = [
   { name = "Qt6::DBus", pub = true },
   { name = "Qt6::Protobuf", pub = true },
   { name = "Qt6::Quick", pub = true },
+  { name = "Qt6::QuickPrivate" },
+  { name = "Qt6::GuiPrivate" },
   { name = "Qt6::Network" },
 ]
-host-tools = [{ name = "moc", target = "Qt6::moc" }]
+host-tools = [
+  { name = "moc", target = "Qt6::moc" },
+  { name = "rcc", target = "Qt6::rcc" },
+  { name = "qmltyperegistrar", target = "Qt6::qmltyperegistrar" },
+]
+
+[[test]]
+name = "image"
+sources = ["test/image.cpp"]
+
+[[test]]
+name = "image-service"
+sources = ["test/image_service.cpp"]

@@ -4,6 +4,18 @@ local qt = require("@lito.qt")
 local qextra = lito.target({ kind = "lib", name = "qextra" })
 local qt6 = lito.external_dependency(qextra, "qt6")
 
+qt.qml_module({
+  target = qextra,
+  qt = qt6,
+  uri = "QExtra",
+  version = "1.0",
+  plugin = "static",
+  qml_files = {},
+  moc_files = {
+    { source = "include/QExtra/image.hpp", mode = "separate", output = "QExtra/moc_image.cpp" },
+  },
+})
+
 qt.moc({
   target = qextra,
   qt = qt6,
