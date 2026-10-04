@@ -88,11 +88,13 @@ struct Key {
   wi::ResizeMode mode;
   u32 maxWidth;
   u32 maxHeight;
+  bool ownedSource;
   bool operator==(const Key &) const = default;
 };
 
 struct State {
   QString path;
+  Option<wi::Source> input;
   Key key;
   bool animation;
   bool cache;
@@ -101,10 +103,11 @@ struct State {
   wi::DecodeRequest size;
   wi::Cancellation cancellation;
   Mutex<Fields> fields;
-  State(QString p, Key k, bool a, bool cached, wi::DecodeRequest s,
-        wi::Cancellation c)
-      : path(rstd::move(p)), key(rstd::move(k)), animation(a), cache(cached),
-        size(s), cancellation(rstd::move(c)), fields(Fields{}) {}
+  State(QString p, Option<wi::Source> source, Key k, bool a, bool cached,
+        wi::DecodeRequest s, wi::Cancellation c)
+      : path(rstd::move(p)), input(rstd::move(source)), key(rstd::move(k)),
+        animation(a), cache(cached), size(s), cancellation(rstd::move(c)),
+        fields(Fields{}) {}
 };
 
 export struct Poll {
@@ -227,13 +230,19 @@ struct Service {
             image.stride,         image.index, image.duration_us};
   }
   static auto key(const QString &path, wi::DecodeRequest size, quint64 context,
-                  int frame) -> Key {
-    QFileInfo file(path);
-    return {
-        path,           file.size(), file.lastModified().toMSecsSinceEpoch(),
-        size.width,     size.height, context,
-        frame,          size.mode,   size.max_width,
-        size.max_height};
+                  int frame, bool ownedSource = false) -> Key {
+    QFileInfo file(ownedSource ? QString() : path);
+    return {path,
+            file.size(),
+            file.lastModified().toMSecsSinceEpoch(),
+            size.width,
+            size.height,
+            context,
+            frame,
+            size.mode,
+            size.max_width,
+            size.max_height,
+            ownedSource};
   }
   auto cached(Key key, int index, wi::ImageInfo &info, bool &eof)
       -> Option<wi::DecodedImage> {
@@ -412,7 +421,8 @@ struct Service {
         session = None();
       }
       if (!session) {
-        auto input = source(state->path);
+        auto input =
+            state->input ? Ok(state->input->clone()) : source(state->path);
         if (input.is_err())
           error = Some(input.unwrap_err_unchecked());
         else {
@@ -526,8 +536,24 @@ public:
   static auto open(QString path, wi::DecodeRequest size, bool animation = false,
                    bool cache = true, quint64 context = 0, int initialFrame = 0)
       -> Result<Request, wi::Error> {
+    return create(rstd::move(path), None(), size, animation, cache, context,
+                  initialFrame);
+  }
+  static auto open_source(QString identity, wi::Source input,
+                          wi::DecodeRequest size, bool animation = false,
+                          bool cache = true, quint64 context = 0,
+                          int initialFrame = 0) -> Result<Request, wi::Error> {
+    return create(rstd::move(identity), Some(rstd::move(input)), size,
+                  animation, cache, context, initialFrame);
+  }
+
+private:
+  static auto create(QString path, Option<wi::Source> input,
+                     wi::DecodeRequest size, bool animation, bool cache,
+                     quint64 context, int initialFrame)
+      -> Result<Request, wi::Error> {
     auto &s = service();
-    auto key = Service::key(path, size, context, initialFrame);
+    auto key = Service::key(path, size, context, initialFrame, input.is_some());
     auto registry = s.requests.lock().unwrap_unchecked();
     registry->retain([](const auto &weak) {
       auto state = weak.upgrade();
@@ -554,9 +580,9 @@ public:
     if (cancellation.is_err()) {
       return Err(wi::Error::ResourceLimit);
     }
-    auto state =
-        Arc<State>::try_make(rstd::move(path), rstd::move(key), animation,
-                             cache, size, cancellation.unwrap_unchecked());
+    auto state = Arc<State>::try_make(rstd::move(path), rstd::move(input),
+                                      rstd::move(key), animation, cache, size,
+                                      cancellation.unwrap_unchecked());
     if (state.is_err()) {
       return Err(wi::Error::ResourceLimit);
     }
@@ -564,6 +590,7 @@ public:
     return Ok(Request(state.unwrap_unchecked()));
   }
 
+public:
   void observe(QObject *receiver, const char *method) {
     if (notification_)
       (*notification_)->disconnect();
@@ -642,6 +669,15 @@ export auto payload_count() -> usize {
   return service().counts->payloads.load(Ordering::Acquire);
 }
 export void clear_cache() { service().clear_cache(); }
+export auto allocate_input(usize bytes) -> Result<wi::Pixels, wi::Error> {
+  auto &s = service();
+  auto pixels = wi::Pixels::allocate(s.budget.clone(), bytes);
+  if (pixels.is_err()) {
+    s.clear_cache();
+    pixels = wi::Pixels::allocate(s.budget.clone(), bytes);
+  }
+  return pixels;
+}
 export void set_cache_limit(usize bytes) {
   auto &s = service();
   auto locked = s.cache.lock().unwrap_unchecked();

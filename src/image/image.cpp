@@ -12,6 +12,7 @@
 
 import rstd;
 import qextra.image.service;
+import qextra.image.network;
 
 using namespace rstd::prelude;
 using rstd::sync::Arc;
@@ -100,6 +101,11 @@ public:
   Image *item;
   QPointer<ImageClock> clock;
   QUrl source;
+  QUrl networkUrl;
+  image::NetworkLoad *download{};
+  Option<wi::Source> networkInput;
+  QString networkIdentity;
+  qreal progress{};
   QSize requested;
   QSize maximum;
   QSize pixels;
@@ -129,6 +135,7 @@ public:
 
   explicit ImagePrivate(Image *owner) : item(owner) {}
   ~ImagePrivate() {
+    delete download;
     for (auto connection : viewportConnections)
       QObject::disconnect(connection);
     if (clock)
@@ -198,9 +205,22 @@ public:
       return;
     status = value;
     error = message;
+    if (value != Image::Loading)
+      setProgress(value == Image::Ready ? 1 : 0);
     emit item->statusChanged();
   }
+  void setProgress(qreal value) {
+    if (value == progress)
+      return;
+    progress = value;
+    emit item->progressChanged();
+  }
   void fail(QString message) {
+    delete download;
+    download = nullptr;
+    networkUrl = QUrl();
+    networkInput = None();
+    networkIdentity.clear();
     request = None();
     candidate = None();
     pending = {};
@@ -216,6 +236,10 @@ public:
   }
   void reload(bool keepImage = false) {
     ++generation;
+    delete download;
+    download = nullptr;
+    networkUrl = QUrl();
+    setProgress(0);
     stopClock();
     request = None();
     candidate = None();
@@ -250,8 +274,12 @@ public:
       path = url.toLocalFile();
     else if (url.isRelative())
       path = url.toString();
-    else {
-      fail(QStringLiteral("Image supports local files and qrc resources only"));
+    else if (url.scheme() == QLatin1String("http") ||
+             url.scheme() == QLatin1String("https")) {
+      networkUrl = url;
+      path = url.path();
+    } else {
+      fail(QStringLiteral("Unsupported image URL scheme"));
       return;
     }
     dpr = 1;
@@ -277,13 +305,28 @@ public:
       }
       contextId = value;
     }
-    auto opened = image::Request::open(
-        path,
-        {u32(qMax(0, requested.width())), u32(qMax(0, requested.height())),
-         fill == Image::PreserveAspectCrop ? wi::ResizeMode::Cover
-                                           : wi::ResizeMode::Fit,
-         u32(qMax(0, maximum.width())), u32(qMax(0, maximum.height()))},
-        animated, cache, contextId, seekFrame);
+    state(Image::Loading);
+    if (!networkUrl.isEmpty()) {
+      if (networkInput) {
+        networkUrl = QUrl();
+        start(image::Request::open_source(
+            networkIdentity, networkInput->clone(), decodeSize(), animated,
+            cache, contextId, seekFrame));
+        return;
+      }
+      wake();
+      return;
+    }
+    start(image::Request::open(path, decodeSize(), animated, cache, contextId,
+                               seekFrame));
+  }
+  wi::DecodeRequest decodeSize() const {
+    return {u32(qMax(0, requested.width())), u32(qMax(0, requested.height())),
+            fill == Image::PreserveAspectCrop ? wi::ResizeMode::Cover
+                                              : wi::ResizeMode::Fit,
+            u32(qMax(0, maximum.width())), u32(qMax(0, maximum.height()))};
+  }
+  void start(Result<image::Request, wi::Error> opened) {
     if (opened.is_err()) {
       fail(QStringLiteral("Image request limit reached"));
       return;
@@ -353,6 +396,38 @@ public:
     if (suspended) {
       suspended = false;
       deadline = position() + remaining;
+    }
+    if (!networkUrl.isEmpty()) {
+      if (!download) {
+        auto *engine = qmlEngine(item);
+        if (!engine) {
+          fail(QStringLiteral("Network images require a QML engine"));
+          return;
+        }
+        download = new image::NetworkLoad(engine, networkUrl, item);
+      }
+      setProgress(download->progress());
+      if (!download->done())
+        return;
+      const auto error = download->error();
+      if (!error.isEmpty()) {
+        fail(error);
+        return;
+      }
+      auto identity = download->identity();
+      auto input = download->take_source();
+      delete download;
+      download = nullptr;
+      networkUrl = QUrl();
+      if (input.is_err()) {
+        fail(QStringLiteral("Cannot read downloaded image"));
+        return;
+      }
+      networkIdentity = rstd::move(identity);
+      networkInput = Some(input.unwrap_unchecked());
+      start(image::Request::open_source(networkIdentity, networkInput->clone(),
+                                        decodeSize(), animated, cache,
+                                        contextId, seekFrame));
     }
     if (!request)
       return;
@@ -612,6 +687,8 @@ void Image::setSource(const QUrl &value) {
   if (d->source == value)
     return;
   d->source = value;
+  d->networkInput = None();
+  d->networkIdentity.clear();
   d->resumeRemaining = None();
   d->seekFrame = 0;
   d->frameCount = 0;
@@ -620,7 +697,7 @@ void Image::setSource(const QUrl &value) {
   d->reload();
 }
 Image::Status Image::status() const { return d->status; }
-qreal Image::progress() const { return d->status == Ready ? 1 : 0; }
+qreal Image::progress() const { return d->progress; }
 QString Image::errorString() const { return d->error; }
 QSize Image::sourceSize() const {
   return {d->requested.width() != -1 ? d->requested.width()

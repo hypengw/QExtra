@@ -24,6 +24,7 @@ sources = [
   "src/executor.cppm",
   "src/watcher.cppm",
   "src/image/service.cppm",
+  "src/image/network.cppm",
   "src/image/image.cpp",
   "src/async.cpp",
   "src/global_static.cpp",
@@ -96,3 +97,7 @@ sources = ["test/image.cpp"]
 [[test]]
 name = "image-service"
 sources = ["test/image_service.cpp"]
+
+[[test]]
+name = "image-network"
+sources = ["test/image_network.cpp"]

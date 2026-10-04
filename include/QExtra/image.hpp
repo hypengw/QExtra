@@ -27,7 +27,7 @@ class Image : public QQuickItem {
   QML_NAMED_ELEMENT(Image)
   Q_PROPERTY(QUrl source READ source WRITE setSource NOTIFY sourceChanged)
   Q_PROPERTY(Status status READ status NOTIFY statusChanged)
-  Q_PROPERTY(qreal progress READ progress NOTIFY statusChanged)
+  Q_PROPERTY(qreal progress READ progress NOTIFY progressChanged)
   Q_PROPERTY(QString errorString READ errorString NOTIFY statusChanged)
   Q_PROPERTY(QSize sourceSize READ sourceSize WRITE setSourceSize NOTIFY
                  sourceSizeChanged)
@@ -111,6 +111,7 @@ public:
 signals:
   void sourceChanged();
   void statusChanged();
+  void progressChanged();
   void sourceSizeChanged();
   void maxSizeChanged();
   void fillModeChanged();
