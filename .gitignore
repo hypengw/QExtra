@@ -1,2 +1,8 @@
 /build/
+/build-*/
 /.lito/
+/lito.lock
+/.cache/
+/.vscode/
+/compile_commands.json
+/doc/doxy/
