@@ -239,7 +239,8 @@ struct Service {
             size.height,
             context,
             frame,
-            size.mode,
+            size.width == u32() && size.height == u32() ? wi::ResizeMode::Fit
+                                                        : size.mode,
             size.max_width,
             size.max_height,
             ownedSource};
@@ -591,6 +592,21 @@ private:
   }
 
 public:
+  bool same_resource(const Request &other) const {
+    return state_->key == other.state_->key &&
+           state_->animation == other.state_->animation &&
+           state_->cache == other.state_->cache;
+  }
+  void release_idle_decoder() {
+    auto fields = state_->fields.lock().unwrap_unchecked();
+    if (!fields->busy) {
+      fields->session = None();
+      fields->sessionNext = 0;
+    }
+  }
+  Option<wi::Source> owned_source() const {
+    return state_->input ? Some(state_->input->clone()) : Option<wi::Source>{};
+  }
   void observe(QObject *receiver, const char *method) {
     if (notification_)
       (*notification_)->disconnect();

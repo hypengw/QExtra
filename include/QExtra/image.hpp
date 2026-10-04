@@ -142,6 +142,8 @@ class AnimatedImage : public Image {
   Q_PROPERTY(bool paused READ paused WRITE setPaused NOTIFY pausedChanged)
   Q_PROPERTY(qreal speed READ speed WRITE setSpeed NOTIFY speedChanged)
   Q_PROPERTY(int loops READ loops WRITE setLoops NOTIFY loopsChanged)
+  Q_PROPERTY(bool sharedPlayback READ sharedPlayback WRITE setSharedPlayback
+                 NOTIFY sharedPlaybackChanged)
 public:
   explicit AnimatedImage(QQuickItem *parent = nullptr);
   bool playing() const;
@@ -152,12 +154,15 @@ public:
   void setSpeed(qreal);
   int loops() const;
   void setLoops(int);
+  bool sharedPlayback() const;
+  void setSharedPlayback(bool);
   Q_INVOKABLE void restart();
 signals:
   void playingChanged();
   void pausedChanged();
   void speedChanged();
   void loopsChanged();
+  void sharedPlaybackChanged();
   void finished();
 };
 } // namespace qextra

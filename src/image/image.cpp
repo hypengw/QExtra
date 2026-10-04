@@ -13,6 +13,7 @@
 import rstd;
 import qextra.image.service;
 import qextra.image.network;
+import qextra.image.playback;
 
 using namespace rstd::prelude;
 using rstd::sync::Arc;
@@ -33,10 +34,7 @@ void ImageCache::setCapacityMiB(int value) {
   emit capacityMiBChanged();
 }
 
-static qreal now() {
-  static const auto epoch = rstd::time::Instant::now();
-  return qreal(epoch.elapsed().as_nanos().to_primitive()) / 1000000.0;
-}
+static qreal now() { return image::playback_time(); }
 
 class ImageClock final : public QObject {
   QTimer timer;
@@ -122,6 +120,8 @@ public:
   qreal speed{1}, deadline{}, remaining{}, dpr{1};
   Option<qreal> resumeRemaining;
   Option<image::Request> request;
+  Option<image::Playback> playback;
+  bool sharedPlayback{}, independentControl{};
   Option<Arc<image::Frame>> candidate;
   QImage pending;
   ImageProvider *provider{};
@@ -222,6 +222,7 @@ public:
     networkInput = None();
     networkIdentity.clear();
     request = None();
+    playback = None();
     candidate = None();
     pending = {};
     stopClock();
@@ -234,6 +235,25 @@ public:
            item->window()->isVisible() &&
            item->window()->visibility() != QWindow::Minimized;
   }
+  bool wantsShared() const {
+    return animated && sharedPlayback && !independentControl && playing &&
+           !paused && speed == 1 && loops == -1 && qmlEngine(item);
+  }
+  bool detachShared() {
+    if (item->isComponentComplete())
+      independentControl = true;
+    if (!playback)
+      return false;
+    auto current = playback->snapshot(false);
+    if (current.frame) {
+      seekFrame = int((*current.frame)->image.index.to_primitive());
+      remaining = current.remaining;
+      deadline = position() + remaining;
+      resumeRemaining = Some(remaining);
+    }
+    playback = None();
+    return true;
+  }
   void reload(bool keepImage = false) {
     ++generation;
     delete download;
@@ -242,6 +262,7 @@ public:
     setProgress(0);
     stopClock();
     request = None();
+    playback = None();
     candidate = None();
     pending = {};
     awaiting = false;
@@ -331,12 +352,28 @@ public:
       fail(QStringLiteral("Image request limit reached"));
       return;
     }
-    request = Some(opened.unwrap_unchecked());
-    request->observe(item, "imageReady");
+    if (wantsShared()) {
+      auto shared = image::Playback::open(
+          qmlEngine(item), opened.unwrap_unchecked(), item, active());
+      if (shared.is_err()) {
+        fail(QStringLiteral("Cannot join shared image playback"));
+        return;
+      }
+      playback = Some(shared.unwrap_unchecked());
+      if (networkInput)
+        networkInput = playback->owned_source();
+    } else {
+      request = Some(opened.unwrap_unchecked());
+      request->observe(item, "imageReady");
+    }
     state(Image::Loading);
     wake();
   }
-  void publish(Arc<image::Frame> frameOwner) {
+  void publish(Arc<image::Frame> frameOwner,
+               Option<qreal> sharedRemaining = {}) {
+    QPointer<Image> guard(item);
+    const auto before = generation;
+    auto valid = [&] { return guard && guard->d->generation == before; };
     const auto oldSourceSize = item->sourceSize();
     const auto &value = frameOwner->image;
     const auto *bytes = value.pixels.data();
@@ -356,21 +393,34 @@ public:
         raw.into_raw());
     pending.setDevicePixelRatio(dpr);
     pixels = size;
-    if (item->sourceSize() != oldSourceSize)
-      emit item->sourceSizeChanged();
-    item->setImplicitSize(size.width() / dpr, size.height() / dpr);
-    if (frame != index) {
-      frame = index;
-      emit item->currentFrameChanged();
-    }
     deadline = (needsFrame || position() > deadline + duration ? position()
                                                                : deadline) +
                duration;
     if (resumeRemaining.is_some())
       deadline = position() + resumeRemaining.take().unwrap_unchecked();
+    if (sharedRemaining)
+      deadline = position() + *sharedRemaining;
     needsFrame = false;
+    if (item->sourceSize() != oldSourceSize) {
+      emit item->sourceSizeChanged();
+      if (!valid())
+        return;
+    }
+    item->setImplicitSize(size.width() / dpr, size.height() / dpr);
+    if (!valid())
+      return;
+    if (frame != index) {
+      frame = index;
+      emit item->currentFrameChanged();
+      if (!valid())
+        return;
+    }
     state(Image::Ready);
+    if (!valid())
+      return;
     emit item->paintedGeometryChanged();
+    if (!valid())
+      return;
     item->update();
     if (!animated) {
       request = None();
@@ -380,9 +430,15 @@ public:
   void tick() {
     stopClock();
     if (invalidated.exchange(false, rstd::sync::atomic::Ordering::AcqRel)) {
-      seekFrame = frame;
-      reload();
+      if (playback) {
+        playback->refresh();
+      } else if (!needsFrame) {
+        seekFrame = wantsShared() ? 0 : frame;
+        reload();
+      }
     }
+    if (playback)
+      playback->suspend(!active());
     if (!active()) {
       if (!suspended) {
         if (!paused)
@@ -428,6 +484,26 @@ public:
       start(image::Request::open_source(networkIdentity, networkInput->clone(),
                                         decodeSize(), animated, cache,
                                         contextId, seekFrame));
+    }
+    if (playback) {
+      auto result = playback->snapshot();
+      if (result.error) {
+        fail(QStringLiteral("Shared image playback failed (%1)")
+                 .arg(int(*result.error)));
+        return;
+      }
+      QPointer<Image> guard(item);
+      const auto before = generation;
+      if (result.info.frame_count != u64() &&
+          frameCount != int(result.info.frame_count.to_primitive())) {
+        frameCount = int(result.info.frame_count.to_primitive());
+        emit item->frameCountChanged();
+        if (!guard || generation != before)
+          return;
+      }
+      if (result.frame)
+        publish(result.frame.unwrap_unchecked(), Some(result.remaining));
+      return;
     }
     if (!request)
       return;
@@ -537,8 +613,11 @@ Image::Image(QQuickItem *parent)
     d->stopClock();
     releaseResources();
     d->renderWindow = window;
-    if (!window)
+    if (!window) {
+      d->observeViewport();
+      d->wake();
       return;
+    }
     auto *clock = window->findChild<QObject *>(
         QStringLiteral("_qextra_image_clock"), Qt::FindDirectChildrenOnly);
     d->clock =
@@ -563,6 +642,9 @@ Image::Image(QQuickItem *parent)
   });
 }
 Image::~Image() {
+  // QQuickItem destruction can emit windowChanged after our private data is
+  // gone.
+  disconnect(this, nullptr, this, nullptr);
   disconnect(d->invalidationConnection);
   disconnect(d->visibilityConnection);
   disconnect(d->animationConnection);
@@ -687,10 +769,13 @@ void Image::setSource(const QUrl &value) {
   if (d->source == value)
     return;
   d->source = value;
+  if (isComponentComplete())
+    d->independentControl = false;
   d->networkInput = None();
   d->networkIdentity.clear();
   d->resumeRemaining = None();
-  d->seekFrame = 0;
+  if (isComponentComplete())
+    d->seekFrame = 0;
   d->frameCount = 0;
   emit sourceChanged();
   emit frameCountChanged();
@@ -763,7 +848,12 @@ void Image::setMipmap(bool value) {
     return;
   d->mipmap = value;
   emit mipmapChanged();
-  d->reload();
+  if (d->playback) {
+    d->playback->refresh();
+    d->wake();
+  } else {
+    d->reload();
+  }
 }
 bool Image::retainWhileLoading() const { return d->retain; }
 void Image::setRetainWhileLoading(bool value) {
@@ -784,6 +874,8 @@ int Image::currentFrame() const { return d->frame; }
 void Image::setCurrentFrame(int value) {
   if (value < 0 || (value == d->frame && d->status == Ready))
     return;
+  d->detachShared();
+  d->independentControl = true;
   d->seekFrame = value;
   d->resumeRemaining = None();
   d->reload();
@@ -796,16 +888,20 @@ bool AnimatedImage::playing() const { return d->playing; }
 void AnimatedImage::setPlaying(bool value) {
   if (value == d->playing)
     return;
+  const bool detached = d->detachShared();
   d->playing = value;
   emit playingChanged();
-  d->resumeRemaining = None();
-  d->seekFrame = 0;
+  if (!detached && isComponentComplete()) {
+    d->resumeRemaining = None();
+    d->seekFrame = 0;
+  }
   d->reload(true);
 }
 bool AnimatedImage::paused() const { return d->paused; }
 void AnimatedImage::setPaused(bool value) {
   if (value == d->paused)
     return;
+  const bool detached = d->detachShared();
   if (value) {
     d->remaining = qMax<qreal>(0, d->deadline - d->position());
     d->stopClock();
@@ -815,29 +911,41 @@ void AnimatedImage::setPaused(bool value) {
     d->deadline = d->position() + d->remaining;
   }
   d->paused = value;
-  d->wake();
+  if (detached)
+    d->reload(true);
+  else
+    d->wake();
   emit pausedChanged();
 }
 qreal AnimatedImage::speed() const { return d->speed; }
 void AnimatedImage::setSpeed(qreal value) {
   if (!qIsFinite(value) || value <= 0 || value == d->speed)
     return;
+  const bool detached = d->detachShared();
   d->remaining =
       (d->paused ? d->remaining : qMax<qreal>(0, d->deadline - d->position())) *
       d->speed / value;
   d->deadline = d->position() + d->remaining;
   d->speed = value;
-  d->wake();
+  if (detached) {
+    d->resumeRemaining = Some(d->remaining);
+    d->reload(true);
+  } else
+    d->wake();
   emit speedChanged();
 }
 int AnimatedImage::loops() const { return d->loops; }
 void AnimatedImage::setLoops(int value) {
   if (value < -1 || value == d->loops)
     return;
+  const bool detached = d->detachShared();
   d->loops = value;
+  if (detached)
+    d->reload(true);
   emit loopsChanged();
 }
 void AnimatedImage::restart() {
+  d->detachShared();
   if (!d->playing) {
     d->playing = true;
     emit playingChanged();
@@ -845,5 +953,25 @@ void AnimatedImage::restart() {
   d->seekFrame = 0;
   d->resumeRemaining = None();
   d->reload();
+}
+bool AnimatedImage::sharedPlayback() const { return d->sharedPlayback; }
+void AnimatedImage::setSharedPlayback(bool value) {
+  if (d->sharedPlayback == value)
+    return;
+  if (!isComponentComplete()) {
+    d->sharedPlayback = value;
+    emit sharedPlaybackChanged();
+    return;
+  }
+  const bool detached = value ? false : d->detachShared();
+  d->sharedPlayback = value;
+  if (value) {
+    d->independentControl = false;
+    d->seekFrame = 0;
+    d->resumeRemaining = None();
+  }
+  if (value || detached)
+    d->reload(true);
+  emit sharedPlaybackChanged();
 }
 } // namespace qextra

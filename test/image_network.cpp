@@ -19,6 +19,7 @@
 import rstd;
 import qextra.image.service;
 import qextra.image.network;
+import qextra.image.playback;
 
 Q_IMPORT_PLUGIN(QExtraPlugin)
 using namespace rstd::prelude;
@@ -273,6 +274,7 @@ import QExtra as QE
 Window {
     visible: true; width: 64; height: 64
     QE.AnimatedImage { objectName: "image"; anchors.fill: parent; maxSize: Qt.size(512, 512) }
+    QE.AnimatedImage { objectName: "peer"; anchors.fill: parent; maxSize: Qt.size(512, 512); sharedPlayback: true; visible: false }
 })",
                     QUrl("qrc:/network.qml"));
   auto *root = component.create();
@@ -282,6 +284,7 @@ Window {
   }
   auto *window = qobject_cast<QQuickWindow *>(root);
   auto *image = root->findChild<qextra::AnimatedImage *>("image");
+  auto *peer = root->findChild<qextra::AnimatedImage *>("peer");
   rstd_assert(wait_for([&] { return window->isExposed(); }));
   auto load = [&](const char *path,
                   qextra::Image::Status expected = qextra::Image::Ready) {
@@ -368,6 +371,46 @@ Window {
   }
   image->setSource(url("/slow"));
   rstd_assert(wait_for([&] { return hits["/slow"] == 2; }));
+  image->setSource(QUrl());
+  image->setSharedPlayback(true);
+  image->setCache(false);
+  peer->setVisible(true);
+  peer->setCache(false);
+  for (const auto &animation : animations) {
+    gif = animation;
+    const auto opened = qextra::image::service_statistics().opened;
+    image->setSource(url("/gif"));
+    peer->setSource(url("/gif"));
+    rstd_assert(wait_for([&] {
+      return image->status() == qextra::Image::Ready &&
+             peer->status() == qextra::Image::Ready;
+    }));
+    rstd_assert(qextra::image::playback_statistics(engine).sessions ==
+                usize(1));
+    rstd_assert(qextra::image::service_statistics().opened ==
+                opened + usize(1));
+    rstd_assert(wait_for([&] {
+      return image->currentFrame() > 0 &&
+             image->currentFrame() == peer->currentFrame();
+    }));
+    image->setSource(QUrl());
+    rstd_assert(qextra::image::playback_statistics(engine).active == usize(1));
+    const auto frame = peer->currentFrame();
+    rstd_assert(wait_for([&] { return peer->currentFrame() != frame; }));
+    peer->setSource(QUrl());
+  }
+  blue = false;
+  load("/changing");
+  blue = true;
+  peer->setSource(url("/changing"));
+  rstd_assert(wait_for([&] { return peer->status() == qextra::Image::Ready; }));
+  rstd_assert(qextra::image::playback_statistics(engine).sessions == usize(2));
+  rstd_assert(color(true));
+  peer->setVisible(false);
+  rstd_assert(color(false));
+  peer->setSource(QUrl());
+  image->setSource(url("/slow"));
+  rstd_assert(wait_for([&] { return hits["/slow"] == 3; }));
   delete engine;
   rstd_assert(
       wait_for([&] { return image->status() == qextra::Image::Error; }));
