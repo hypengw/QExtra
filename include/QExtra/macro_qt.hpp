@@ -202,31 +202,47 @@ private: \
 #endif //Q_MOC_RUN
 
 
+// Qt 6.12 removed the SFINAE parameter and registration-function friendship.
+#if QT_VERSION >= QT_VERSION_CHECK(6, 12, 0)
+#define QEXTRA_QML_TRAIT_TEMPLATE template<typename>
+#define QEXTRA_QML_REGISTER_FRIEND
+#else
+#define QEXTRA_QML_TRAIT_TEMPLATE template<typename, typename>
+#define QEXTRA_QML_REGISTER_FRIEND \
+    QT_WARNING_PUSH \
+    QT_WARNING_DISABLE_GCC("-Wredundant-decls") \
+    template<typename... Args> \
+    friend void QML_REGISTER_TYPES_AND_REVISIONS(const char *uri, int versionMajor, QList<int> *); \
+    QT_WARNING_POP
+#endif
+
 // forward declarations of structs and functions defined in QtQml
 QT_BEGIN_NAMESPACE
 namespace QQmlPrivate {
-    template<typename, typename> struct QmlSingleton;
+    QEXTRA_QML_TRAIT_TEMPLATE struct QmlSingleton;
     template<class, class, bool> struct QmlAttached;
     template<class> struct QmlAttachedAccessor;
-    template<class, class> struct QmlExtended;
-    template<typename, typename> struct QmlInterface;
-    template<class, class>
+    QEXTRA_QML_TRAIT_TEMPLATE struct QmlExtended;
+    QEXTRA_QML_TRAIT_TEMPLATE struct QmlInterface;
+    QEXTRA_QML_TRAIT_TEMPLATE
     struct QmlExtendedNamespace;
-    template<class, class>
+    QEXTRA_QML_TRAIT_TEMPLATE
     struct QmlUncreatable;
-    template<class, class>
+    QEXTRA_QML_TRAIT_TEMPLATE
     struct QmlAnonymous;
-    template<class, class>
+    QEXTRA_QML_TRAIT_TEMPLATE
     struct QmlSequence;
-    template<class, class>
+    QEXTRA_QML_TRAIT_TEMPLATE
     struct QmlResolved;
 }
 
+#if QT_VERSION < QT_VERSION_CHECK(6, 12, 0)
 template <typename T> class QList;
 
 template<typename... Args>
 void qmlRegisterTypesAndRevisions(const char *uri, int versionMajor,
                                   QList<int> *qmlTypeIds = nullptr);
+#endif
 
 QT_END_NAMESPACE
 
@@ -234,8 +250,10 @@ QT_END_NAMESPACE
 #define QML_PRIVATE_NAMESPACE \
     QT_PREPEND_NAMESPACE(QQmlPrivate)
 
+#if QT_VERSION < QT_VERSION_CHECK(6, 12, 0)
 #define QML_REGISTER_TYPES_AND_REVISIONS \
     QT_PREPEND_NAMESPACE(qmlRegisterTypesAndRevisions)
+#endif
 
 
 #define QML_ELEMENT \
@@ -245,12 +263,8 @@ QT_END_NAMESPACE
 #define QML_ANONYMOUS \
     Q_CLASSINFO("QML.Element", "anonymous") \
     enum class QmlIsAnonymous{yes = true}; \
-    template<typename, typename> friend struct QML_PRIVATE_NAMESPACE::QmlAnonymous; \
-    QT_WARNING_PUSH \
-    QT_WARNING_DISABLE_GCC("-Wredundant-decls") \
-    template<typename... Args> \
-    friend void QML_REGISTER_TYPES_AND_REVISIONS(const char *uri, int versionMajor, QList<int> *); \
-    QT_WARNING_POP \
+    QEXTRA_QML_TRAIT_TEMPLATE friend struct QML_PRIVATE_NAMESPACE::QmlAnonymous; \
+    QEXTRA_QML_REGISTER_FRIEND \
     inline constexpr void qt_qmlMarker_anonymous() {}
 
 #define QML_NAMED_ELEMENT(NAME) \
@@ -260,12 +274,8 @@ QT_END_NAMESPACE
     Q_CLASSINFO("QML.Creatable", "false") \
     Q_CLASSINFO("QML.UncreatableReason", REASON) \
     enum class QmlIsUncreatable {yes = true}; \
-    template<typename, typename> friend struct QML_PRIVATE_NAMESPACE::QmlUncreatable; \
-    QT_WARNING_PUSH \
-    QT_WARNING_DISABLE_GCC("-Wredundant-decls") \
-    template<typename... Args> \
-    friend void QML_REGISTER_TYPES_AND_REVISIONS(const char *uri, int versionMajor, QList<int> *); \
-    QT_WARNING_POP \
+    QEXTRA_QML_TRAIT_TEMPLATE friend struct QML_PRIVATE_NAMESPACE::QmlUncreatable; \
+    QEXTRA_QML_REGISTER_FRIEND \
     inline constexpr void qt_qmlMarker_uncreatable() {}
 
 #define QML_VALUE_TYPE(NAME) \
@@ -282,12 +292,8 @@ QT_END_NAMESPACE
 #define QML_SINGLETON \
     Q_CLASSINFO("QML.Singleton", "true") \
     enum class QmlIsSingleton {yes = true}; \
-    template<typename, typename> friend struct QML_PRIVATE_NAMESPACE::QmlSingleton; \
-    QT_WARNING_PUSH \
-    QT_WARNING_DISABLE_GCC("-Wredundant-decls") \
-    template<typename... Args> \
-    friend void QML_REGISTER_TYPES_AND_REVISIONS(const char *uri, int versionMajor, QList<int> *); \
-    QT_WARNING_POP \
+    QEXTRA_QML_TRAIT_TEMPLATE friend struct QML_PRIVATE_NAMESPACE::QmlSingleton; \
+    QEXTRA_QML_REGISTER_FRIEND \
     inline constexpr void qt_qmlMarker_singleton() {}
 
 #define QML_ADDED_IN_MINOR_VERSION(VERSION) \
@@ -315,24 +321,16 @@ QT_END_NAMESPACE
 #define QML_EXTENDED(EXTENDED_TYPE) \
     Q_CLASSINFO("QML.Extended", #EXTENDED_TYPE) \
     using QmlExtendedType = EXTENDED_TYPE; \
-    template<class, class> friend struct QML_PRIVATE_NAMESPACE::QmlExtended; \
-    QT_WARNING_PUSH \
-    QT_WARNING_DISABLE_GCC("-Wredundant-decls") \
-    template<typename... Args> \
-    friend void QML_REGISTER_TYPES_AND_REVISIONS(const char *uri, int versionMajor, QList<int> *); \
-    QT_WARNING_POP \
+    QEXTRA_QML_TRAIT_TEMPLATE friend struct QML_PRIVATE_NAMESPACE::QmlExtended; \
+    QEXTRA_QML_REGISTER_FRIEND \
     inline constexpr void qt_qmlMarker_extended() {}
 
 #define QML_EXTENDED_NAMESPACE(EXTENDED_NAMESPACE) \
     Q_CLASSINFO("QML.Extended", #EXTENDED_NAMESPACE) \
     Q_CLASSINFO("QML.ExtensionIsNamespace", "true") \
     static constexpr const QMetaObject *qmlExtendedNamespace() { return &EXTENDED_NAMESPACE::staticMetaObject; } \
-    template<class, class> friend struct QML_PRIVATE_NAMESPACE::QmlExtendedNamespace; \
-    QT_WARNING_PUSH \
-    QT_WARNING_DISABLE_GCC("-Wredundant-decls") \
-    template<typename... Args> \
-    friend void QML_REGISTER_TYPES_AND_REVISIONS(const char *uri, int versionMajor, QList<int> *); \
-    QT_WARNING_POP \
+    QEXTRA_QML_TRAIT_TEMPLATE friend struct QML_PRIVATE_NAMESPACE::QmlExtendedNamespace; \
+    QEXTRA_QML_REGISTER_FRIEND \
     inline constexpr void qt_qmlMarker_extendedNamespace() {}
 
 #define QML_NAMESPACE_EXTENDED(EXTENDED_NAMESPACE) \
@@ -341,29 +339,21 @@ QT_END_NAMESPACE
 #define QML_INTERFACE \
     Q_CLASSINFO("QML.Element", "anonymous") \
     enum class QmlIsInterface {yes = true}; \
-    template<typename, typename> friend struct QML_PRIVATE_NAMESPACE::QmlInterface; \
-    QT_WARNING_PUSH \
-    QT_WARNING_DISABLE_GCC("-Wredundant-decls") \
-    template<typename... Args> \
-    friend void QML_REGISTER_TYPES_AND_REVISIONS(const char *uri, int versionMajor, QList<int> *); \
-    QT_WARNING_POP \
+    QEXTRA_QML_TRAIT_TEMPLATE friend struct QML_PRIVATE_NAMESPACE::QmlInterface; \
+    QEXTRA_QML_REGISTER_FRIEND \
     inline constexpr void qt_qmlMarker_interface() {}
 
 #define QML_IMPLEMENTS_INTERFACES(INTERFACES) \
     Q_INTERFACES(INTERFACES) \
     enum class QmlIsInterface {yes = false}; \
-    template<typename, typename> friend struct QML_PRIVATE_NAMESPACE::QmlInterface;
+    QEXTRA_QML_TRAIT_TEMPLATE friend struct QML_PRIVATE_NAMESPACE::QmlInterface;
 
 #define QML_SEQUENTIAL_CONTAINER(VALUE_TYPE) \
     Q_CLASSINFO("QML.Sequence", #VALUE_TYPE) \
     using QmlSequenceValueType = VALUE_TYPE; \
     enum class QmlIsSequence {yes = true}; \
-    template<typename, typename> friend struct QML_PRIVATE_NAMESPACE::QmlSequence; \
-    QT_WARNING_PUSH \
-    QT_WARNING_DISABLE_GCC("-Wredundant-decls") \
-    template<typename... Args> \
-    friend void QML_REGISTER_TYPES_AND_REVISIONS(const char *uri, int versionMajor, QList<int> *); \
-    QT_WARNING_POP \
+    QEXTRA_QML_TRAIT_TEMPLATE friend struct QML_PRIVATE_NAMESPACE::QmlSequence; \
+    QEXTRA_QML_REGISTER_FRIEND \
     inline constexpr void qt_qmlMarker_sequence() {}
 
 #define QML_UNAVAILABLE \
@@ -372,12 +362,8 @@ QT_END_NAMESPACE
 #define QML_FOREIGN(FOREIGN_TYPE) \
     Q_CLASSINFO("QML.Foreign", #FOREIGN_TYPE) \
     using QmlForeignType = FOREIGN_TYPE; \
-    template<class, class> friend struct QML_PRIVATE_NAMESPACE::QmlResolved; \
-    QT_WARNING_PUSH \
-    QT_WARNING_DISABLE_GCC("-Wredundant-decls") \
-    template<typename... Args> \
-    friend void QML_REGISTER_TYPES_AND_REVISIONS(const char *uri, int versionMajor, QList<int> *); \
-    QT_WARNING_POP \
+    QEXTRA_QML_TRAIT_TEMPLATE friend struct QML_PRIVATE_NAMESPACE::QmlResolved; \
+    QEXTRA_QML_REGISTER_FRIEND \
     inline constexpr void qt_qmlMarker_foreign() {}
 
 #define QML_FOREIGN_NAMESPACE(FOREIGN_NAMESPACE) \
