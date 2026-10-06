@@ -1,6 +1,6 @@
 export module qextra:bindable;
 export import rstd.cppstd;
-export import qt;
+export import qextra.qt;
 
 export template<typename Class, typename T, auto Signal = nullptr>
 class ObjectBindableProperty : public QPropertyData<T> {

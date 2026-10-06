@@ -1,21 +1,10 @@
-module;
-#include <QtCore/QByteArrayView>
-#include <QtCore/QCryptographicHash>
-#include <QtCore/QMetaObject>
-#include <QtCore/QObject>
-#include <QtCore/QPointer>
-#include <QtCore/QTimer>
-#include <QtCore/QUrl>
-#include <QtNetwork/QNetworkAccessManager>
-#include <QtNetwork/QNetworkReply>
-#include <QtNetwork/QNetworkRequest>
-#include <QtQml/QQmlEngine>
-
-export module qextra.image.network;
-import qextra.image.service;
+export module qextra:image.network;
+import qextra.qt;
+import :image.service;
 import rstd;
 
 using namespace rstd::prelude;
+using namespace Qt::StringLiterals;
 namespace wi = wavsen::image;
 
 namespace qextra::image {
@@ -126,7 +115,7 @@ export class NetworkLoad : public QObject {
     auto declared =
         reply_->header(QNetworkRequest::ContentLengthHeader).toLongLong();
     if (declared > 0 && u64(declared) > limit) {
-      stop(QStringLiteral("Image response exceeds the encoded size limit"));
+      stop(u"Image response exceeds the encoded size limit"_s);
       return;
     }
     total_ = declared;
@@ -143,7 +132,7 @@ export class NetworkLoad : public QObject {
     qint64 remaining = 4 * chunk_bytes;
     while (reply_ && reply_->bytesAvailable() > 0 && remaining > 0) {
       if (u64(input_.length.to_primitive()) >= limit) {
-        stop(QStringLiteral("Image response exceeds the encoded size limit"));
+        stop(u"Image response exceeds the encoded size limit"_s);
         return;
       }
       auto within = input_.length % usize(chunk_bytes);
@@ -151,7 +140,7 @@ export class NetworkLoad : public QObject {
           input_.chunks.len() == input_.length / usize(chunk_bytes)) {
         auto chunk = allocate_input(usize(chunk_bytes));
         if (chunk.is_err() || input_.chunks.try_reserve(usize(1)).is_err()) {
-          stop(QStringLiteral("Image input memory budget exhausted"));
+          stop(u"Image input memory budget exhausted"_s);
           return;
         }
         input_.chunks.push(chunk.unwrap_unchecked());
@@ -163,7 +152,7 @@ export class NetworkLoad : public QObject {
       const auto count = reply_->read(
           data, qMin(remaining, chunk_bytes - qint64(within.to_primitive())));
       if (count < 0) {
-        stop(QStringLiteral("Cannot read image response"));
+        stop(u"Cannot read image response"_s);
         return;
       }
       if (count == 0)
@@ -213,7 +202,7 @@ export class NetworkLoad : public QObject {
     QObject::connect(reply_, &QObject::destroyed, this, [this] {
       reply_ = nullptr;
       if (!done_)
-        stop(QStringLiteral("Image network manager was destroyed"));
+        stop(u"Image network manager was destroyed"_s);
     });
     timeout_.start(30000);
     if (reply_->isFinished())
@@ -226,7 +215,7 @@ public:
         receiver_(receiver), url_(rstd::move(url)) {
     timeout_.setSingleShot(true);
     QObject::connect(&timeout_, &QTimer::timeout, this, [this] {
-      stop(QStringLiteral("Image download timed out"));
+      stop(u"Image download timed out"_s);
     });
     queue_->enqueue(this);
   }
@@ -282,7 +271,7 @@ NetworkQueue *NetworkQueue::get(QQmlEngine *engine) {
 
 void NetworkQueue::enqueue(NetworkLoad *load) {
   if (closing_) {
-    load->stop(QStringLiteral("Image network engine was destroyed"));
+    load->stop(u"Image network engine was destroyed"_s);
     return;
   }
   waiting_.emplace_back(load);
@@ -319,8 +308,8 @@ void NetworkQueue::shutdown() {
     return;
   closing_ = true;
   while (auto load = waiting_.pop())
-    (*load)->stop(QStringLiteral("Image network engine was destroyed"));
+    (*load)->stop(u"Image network engine was destroyed"_s);
   while (auto load = active_.pop())
-    (*load)->stop(QStringLiteral("Image network engine was destroyed"));
+    (*load)->stop(u"Image network engine was destroyed"_s);
 }
 } // namespace qextra::image

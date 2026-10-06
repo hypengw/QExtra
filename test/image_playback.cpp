@@ -1,22 +1,13 @@
 #include "QExtra/image.hpp"
-#include <QtCore/QElapsedTimer>
-#include <QtCore/QFile>
-#include <QtCore/QPluginLoader>
-#include <QtCore/QTemporaryDir>
-#include <QtCore/QThread>
-#include <QtGui/QGuiApplication>
-#include <QtQml/QQmlComponent>
-#include <QtQml/QQmlEngine>
-#include <QtQuick/QQuickWindow>
+#include "tests.hpp"
 #include <rstd/macro.hpp>
 import rstd;
-import qextra.image.service;
-import qextra.image.playback;
+import qextra;
 
-Q_IMPORT_PLUGIN(QExtraPlugin)
 using namespace rstd::prelude;
 namespace qi = qextra::image;
 
+namespace {
 template <typename F> bool wait_for(F predicate, int timeout = 5000) {
   QElapsedTimer timer;
   timer.start();
@@ -372,8 +363,9 @@ void static_tests() {
   }
   drain();
 }
+} // namespace
 
-int main(int argc, char **argv) {
+int run_image_playback(int argc, char **argv) {
   QGuiApplication app(argc, argv);
   static_tests();
   for (int i = 1; i < argc; ++i) {
@@ -384,4 +376,5 @@ int main(int argc, char **argv) {
   }
   qInfo()
       << "shared playback lifecycle, independent controls and pixels passed";
+  return 0;
 }

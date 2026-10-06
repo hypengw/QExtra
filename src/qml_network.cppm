@@ -1,5 +1,5 @@
 export module qextra:qml_network;
-export import qt;
+export import qextra.qt;
 export import rstd.cppstd;
 
 export class QmlNetworkDiskCache {

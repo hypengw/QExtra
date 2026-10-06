@@ -3,7 +3,7 @@ module;
 export module qextra:helper;
 // export import qcm.helper;
 export import rstd.cppstd;
-export import qt;
+export import qextra.qt;
 
 using namespace Qt::StringLiterals;
 

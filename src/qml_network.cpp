@@ -1,11 +1,5 @@
 module;
-#include <QtCore/QDebug>
-#include <QtCore/QDir>
-#include <QtCore/QStandardPaths>
-#include <QtNetwork/QNetworkAccessManager>
-#include <QtNetwork/QNetworkDiskCache>
-#include <QtQml/QQmlEngine>
-#include <QtQml/QQmlNetworkAccessManagerFactory>
+#include "QExtra/macro_qt.hpp"
 
 module qextra;
 import :qml_network;
@@ -64,7 +58,7 @@ auto default_qml_network_cache_dir() -> QString {
     auto dir  = QDir(base);
     auto path = dir.filePath(u"qml-network"_s);
     if (! dir.mkpath(u"qml-network"_s)) {
-        qWarning("failed to create QML network cache directory: %s", qPrintable(path));
+        qWarning() << "failed to create QML network cache directory:" << path;
         return {};
     }
     return path;

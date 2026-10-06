@@ -1,9 +1,5 @@
-#pragma once
-
-#include <QtQuick/QQuickWindow>
-#include <QtQuick/QSGTexture>
-#include <QtQuick/QSGTextureProvider>
-#include <rhi/qrhi.h>
+module qextra:image.texture;
+import qextra.qt;
 
 namespace qextra {
 

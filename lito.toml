@@ -2,65 +2,21 @@
 name = "qextra"
 version = "0.1.0"
 
-[dependencies.lito-qt]
-builtin = "qt"
+[dependencies]
+lito-qt = { version = "0.1.1" }
+rstd-std = { version = "0.1.5", pub = true }
+rstd-cppstd = { version = "0.1.5", pub = true }
+ncrequest = { git = "https://github.com/hypengw/ncrequest.git", pub = true }
+wavsen = { git = "https://github.com/hypengw/wavsen.git", pub = true }
 
 [lib]
 name = "qextra"
 module = "qextra"
 archive = "qextra"
-sources = [
-  "src/qt.cppm",
-  "src/mod.cppm",
-  "src/kstore.cppm",
-  "src/async.cppm",
-  "src/helper.cppm",
-  "src/bindable.cppm",
-  "src/global_static.cppm",
-  "src/qml_network.cppm",
-  "src/query.cppm",
-  "src/select_storage.cppm",
-  "src/task.cppm",
-  "src/executor.cppm",
-  "src/watcher.cppm",
-  "src/image/service.cppm",
-  "src/image/network.cppm",
-  "src/image/playback.cppm",
-  "src/image/image.cpp",
-  "src/async.cpp",
-  "src/global_static.cpp",
-  "src/qml_network.cpp",
-  "src/query.cpp",
-  "src/select_storage.cpp",
-  "src/kstore/share_store.cpp",
-  "src/kstore/moc.cpp",
-  "src/kstore/meta_role.cpp",
-  "src/kstore/meta_utils.cpp",
-  "src/kstore/gadget_model.cpp",
-  "src/kstore/meta_list_model.cpp",
-  "src/kstore/qtable_proxy_model.cpp",
-  "src/kstore/qunion_list_model.cpp",
-]
 
 [usage]
 public-include-directories = ["include"]
 private-include-directories = ["src", "include/QExtra"]
-
-[dependencies.rstd-std]
-version = "0.1.5"
-pub = true
-
-[dependencies.rstd-cppstd]
-version = "0.1.5"
-pub = true
-
-[dependencies.ncrequest]
-git = "https://github.com/hypengw/ncrequest.git"
-pub = true
-
-[dependencies.wavsen]
-git = "https://github.com/hypengw/wavsen.git"
-pub = true
 
 [external-dependencies.cmake.qt6]
 package = "Qt6"
@@ -92,17 +48,12 @@ host-tools = [
 ]
 
 [[test]]
-name = "image"
-sources = ["test/image.cpp"]
-
-[[test]]
-name = "image-service"
-sources = ["test/image_service.cpp"]
-
-[[test]]
-name = "image-network"
-sources = ["test/image_network.cpp"]
-
-[[test]]
-name = "image-playback"
-sources = ["test/image_playback.cpp"]
+name = "qextra-tests"
+sources = [
+  "test/main.cpp",
+  "test/image.cpp",
+  "test/image_service.cpp",
+  "test/image_network.cpp",
+  "test/image_playback.cpp",
+  "test/kstore.cpp",
+]

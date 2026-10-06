@@ -1,8 +1,11 @@
+module;
 #include "kstore/qt/meta_list_model.hpp"
 
-#include <QMetaProperty>
-
+module qextra:kstore.meta_list_model;
+import qextra.qt;
 import rstd.cppstd;
+
+extern "C++" {
 
 namespace kstore
 {
@@ -280,3 +283,4 @@ auto QMetaListModel::roleNames() const -> QHash<int, QByteArray> {
 }
 
 } // namespace kstore
+}

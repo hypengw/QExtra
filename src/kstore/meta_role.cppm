@@ -1,4 +1,9 @@
+module;
 #include "kstore/qt/meta_role.hpp"
+
+module qextra:kstore.meta_role;
+
+extern "C++" {
 
 namespace kstore
 {
@@ -85,3 +90,4 @@ auto QMetaRoleNames::methodOfRole(int role) const -> std::optional<QMetaMethod> 
 }
 
 } // namespace kstore
+}

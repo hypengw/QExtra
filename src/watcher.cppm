@@ -1,7 +1,7 @@
 export module qextra:watcher;
 export import rstd;
 export import rstd.cppstd;
-export import qt;
+export import qextra.qt;
 
 using rstd::sync::atomic::Atomic;
 

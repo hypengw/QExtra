@@ -1,10 +1,10 @@
+module;
 #include "kstore/qt/meta_utils.hpp"
-#include <QtCore/QJsonObject>
-#include <QtCore/QJsonArray>
-#include <QtCore/QMetaObject>
-#include <QtCore/QMetaProperty>
-#include <QtCore/QSequentialIterable>
-#include <QtCore/QAssociativeIterable>
+
+module qextra:kstore.meta_utils;
+import qextra.qt;
+
+extern "C++" {
 
 namespace
 {
@@ -172,4 +172,5 @@ auto kstore::qvariant_from_josn(const QMetaType& type, const QJsonValue& value) 
     }
 
     return QVariant {};
+}
 }

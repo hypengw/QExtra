@@ -1,11 +1,6 @@
-module;
-#include <QtCore/QPointer>
-#include <QtCore/QTimer>
-#include <QtCore/QtMath>
-#include <QtQml/QQmlEngine>
-
-export module qextra.image.playback;
-import qextra.image.service;
+export module qextra:image.playback;
+import qextra.qt;
+import :image.service;
 import rstd;
 
 using namespace rstd::prelude;

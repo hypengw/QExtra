@@ -1,21 +1,14 @@
 #include "QExtra/image.hpp"
-#include <QtCore/QElapsedTimer>
-#include <QtCore/QPluginLoader>
-#include <QtCore/QThread>
-#include <QtGui/QGuiApplication>
-#include <QtQml/QQmlComponent>
-#include <QtQml/QQmlEngine>
-#include <QtQuick/QQuickWindow>
+#include "tests.hpp"
 #include <rstd/macro.hpp>
 
 import rstd;
-import qextra.image.service;
-
-Q_IMPORT_PLUGIN(QExtraPlugin)
+import qextra;
 
 using namespace rstd::prelude;
 using namespace rstd::literals;
 
+namespace {
 template <typename F> bool wait_for(F predicate, int timeout = 5000) {
   QElapsedTimer timer;
   timer.start();
@@ -25,8 +18,9 @@ template <typename F> bool wait_for(F predicate, int timeout = 5000) {
   }
   return predicate();
 }
+} // namespace
 
-int main(int argc, char **argv) {
+int run_image(int argc, char **argv) {
   QGuiApplication app(argc, argv);
   auto directory = rstd::fs::TempDir::make("qextra-image"_str).unwrap();
   auto path = rstd::path::PathBuf::from(directory.path()).join("image.ppm"_str);
@@ -245,4 +239,5 @@ Window {
           [] { return qextra::image::statistics().live_bytes == usize(); }));
     }
   }
+  return 0;
 }

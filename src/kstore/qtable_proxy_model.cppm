@@ -1,4 +1,9 @@
+module;
 #include "kstore/qt/qtable_proxy_model.hpp"
+
+module qextra:kstore.qtable_proxy_model;
+
+extern "C++" {
 
 namespace kstore
 {
@@ -175,3 +180,4 @@ void QTableProxyModel::sourceAboutToBeReset() { beginResetModel(); }
 void QTableProxyModel::sourceReset() { endResetModel(); }
 
 } // namespace kstore
+}

@@ -1,12 +1,7 @@
-module;
-#include <QMetaObject>
-#include <QObject>
-#include <QPointer>
-
 export module qextra:executor;
 export import rstd;
 export import rstd.cppstd;
-export import qt;
+export import qextra.qt;
 
 export class QtExecutor {
 public:

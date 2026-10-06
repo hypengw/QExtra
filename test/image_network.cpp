@@ -1,29 +1,12 @@
 #include "QExtra/image.hpp"
-#include <QtCore/QElapsedTimer>
-#include <QtCore/QFile>
-#include <QtCore/QPluginLoader>
-#include <QtCore/QTemporaryDir>
-#include <QtCore/QThread>
-#include <QtCore/QTimer>
-#include <QtGui/QGuiApplication>
-#include <QtNetwork/QNetworkAccessManager>
-#include <QtNetwork/QNetworkDiskCache>
-#include <QtNetwork/QNetworkReply>
-#include <QtNetwork/QTcpServer>
-#include <QtNetwork/QTcpSocket>
-#include <QtQml/QQmlComponent>
-#include <QtQml/QQmlEngine>
-#include <QtQml/QQmlNetworkAccessManagerFactory>
-#include <QtQuick/QQuickWindow>
+#include "tests.hpp"
 #include <rstd/macro.hpp>
 import rstd;
-import qextra.image.service;
-import qextra.image.network;
-import qextra.image.playback;
+import qextra;
 
-Q_IMPORT_PLUGIN(QExtraPlugin)
 using namespace rstd::prelude;
 
+namespace {
 template <typename F> bool wait_for(F predicate, int timeout = 5000) {
   QElapsedTimer timer;
   timer.start();
@@ -170,8 +153,9 @@ void test_queue() {
   qInfo()
       << "network queue engine isolation, limit, order and cancellation passed";
 }
+} // namespace
 
-int main(int argc, char **argv) {
+int run_image_network(int argc, char **argv) {
   QGuiApplication app(argc, argv);
   test_queue();
   QByteArray gif;
@@ -419,4 +403,5 @@ Window {
   rstd_assert(wait_for(
       [] { return qextra::image::statistics().live_bytes == usize(); }));
   qInfo() << "network image lifecycle, cache and animation passed";
+  return 0;
 }

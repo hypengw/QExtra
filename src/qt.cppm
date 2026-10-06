@@ -1,5 +1,6 @@
 module;
 #include <QtCore/QAbstractListModel>
+#include <QtCore/QAssociativeIterable>
 #include <QtCore/QChar>
 #include <QtCore/QCommandLineParser>
 #include <QtCore/QCoreApplication>
@@ -7,6 +8,7 @@ module;
 #include <QtCore/QDataStream>
 #include <QtCore/QDebug>
 #include <QtCore/QDir>
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QEvent>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
@@ -23,6 +25,7 @@ module;
 #include <QtCore/QList>
 #include <QtCore/QLocale>
 #include <QtCore/QLoggingCategory>
+#include <QtCore/QMetaProperty>
 #include <QtCore/QObject>
 #include <QtCore/QObjectBindableProperty>
 #include <QtCore/QPluginLoader>
@@ -33,11 +36,14 @@ module;
 #include <QtCore/QRegularExpression>
 #include <QtCore/QRunnable>
 #include <QtCore/QSettings>
+#include <QtCore/QSequentialIterable>
 #include <QtCore/QSortFilterProxyModel>
 #include <QtCore/QStandardPaths>
 #include <QtCore/QString>
 #include <QtCore/QStringBuilder>
 #include <QtCore/QStringList>
+#include <QtCore/QStringListModel>
+#include <QtCore/QTemporaryDir>
 #include <QtCore/QThread>
 #include <QtCore/QThreadPool>
 #include <QtCore/QTimer>
@@ -46,8 +52,18 @@ module;
 #include <QtCore/QVariant>
 #include <QtCore/QVariantList>
 #include <QtCore/QVariantMap>
+#include <QtCore/QVersionNumber>
 #include <QtCore/qnamespace.h>
 #include <QtCore/qtypes.h>
+#include <QtCore/QtMath>
+
+#include <QtNetwork/QHostAddress>
+#include <QtNetwork/QNetworkAccessManager>
+#include <QtNetwork/QNetworkDiskCache>
+#include <QtNetwork/QNetworkReply>
+#include <QtNetwork/QNetworkRequest>
+#include <QtNetwork/QTcpServer>
+#include <QtNetwork/QTcpSocket>
 
 #include <QtDBus/QDBusConnection>
 #include <QtDBus/QDBusConnectionInterface>
@@ -71,7 +87,9 @@ module;
 #include <QtQml/QJSValueIterator>
 #include <QtQml/QQmlApplicationEngine>
 #include <QtQml/QQmlEngine>
+#include <QtQml/QQmlInfo>
 #include <QtQml/QQmlListProperty>
+#include <QtQml/QQmlNetworkAccessManagerFactory>
 #include <QtQml/QQmlParserStatus>
 #include <QtQml/QQmlPropertyMap>
 
@@ -79,12 +97,46 @@ module;
 #include <QtQuick/QQuickImageProvider>
 #include <QtQuick/QQuickItem>
 #include <QtQuick/QQuickWindow>
+#include <QtQuick/QSGImageNode>
+#include <QtQuick/QSGRendererInterface>
+#include <QtQuick/QSGTextureProvider>
+#include <rhi/qrhi.h>
 
 #include <QtCore/QApplicationStatic>
 #include <QtQml/QQmlContext>
 #include <QtQml/QQmlEngineExtensionPlugin>
 
-export module qt;
+export module qextra.qt;
+
+export using ::qMin;
+export using ::qMax;
+export using ::qBound;
+export using ::qCeil;
+export using ::qIsFinite;
+export using ::QElapsedTimer;
+export using ::QTemporaryDir;
+export using ::QStringListModel;
+export using ::QMetaProperty;
+export using ::QSequentialIterable;
+export using ::QAssociativeIterable;
+export using ::QNetworkAccessManager;
+export using ::QNetworkDiskCache;
+export using ::QNetworkReply;
+export using ::QNetworkRequest;
+export using ::QTcpServer;
+export using ::QTcpSocket;
+export using ::QHostAddress;
+export using ::QQmlInfo;
+export using ::qmlWarning;
+export using ::QQmlNetworkAccessManagerFactory;
+export using ::QSGNode;
+export using ::QSGImageNode;
+export using ::QSGRendererInterface;
+export using ::QSGTexture;
+export using ::QSGTextureProvider;
+export using ::QRhi;
+export using ::QRhiTexture;
+export using ::QRhiResourceUpdateBatch;
 
 export using ::qobject_cast;
 export using ::QFlag;
@@ -163,6 +215,7 @@ export using ::QProcess;
 export using ::QLibraryInfo;
 export using ::QLocale;
 export using ::QTranslator;
+export using ::QVersionNumber;
 
 export using ::QGuiApplication;
 export using ::QSurfaceFormat;
@@ -184,6 +237,7 @@ export using ::QDBusVariant;
 export using ::QSettings;
 export using ::QDataStream;
 export using ::operator&;
+export using ::operator+;
 export using ::operator<<;
 export using ::operator>>;
 export using ::operator^;
@@ -241,6 +295,7 @@ using Qt::ConnectionType;
 using Qt::DirectConnection;
 using Qt::makePropertyBinding;
 using Qt::QueuedConnection;
+using Qt::PreciseTimer;
 using Qt::SkipEmptyParts;
 using Qt::UniqueConnection;
 using Qt::UserRole;

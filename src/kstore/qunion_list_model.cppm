@@ -1,6 +1,10 @@
+module;
 #include "kstore/qt/qunion_list_model.hpp"
 
+module qextra:kstore.qunion_list_model;
 import rstd.cppstd;
+
+extern "C++" {
 
 namespace kstore
 {
@@ -289,3 +293,4 @@ void QUnionListModel::resolveAllMappings() {
 }
 
 } // namespace kstore
+}

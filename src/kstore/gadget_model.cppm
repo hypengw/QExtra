@@ -1,4 +1,9 @@
+module;
 #include "kstore/qt/gadget_model.hpp"
+
+module qextra:kstore.gadget_model;
+
+extern "C++" {
 
 auto kstore::readOnGadget(const QVariant& obj, const char* name) -> QVariant {
     if (auto meta = obj.metaType().metaObject()) {
@@ -60,3 +65,4 @@ bool QGadgetListModel::setData(const QModelIndex& index, const QVariant& value, 
     return false;
 }
 } // namespace kstore
+}

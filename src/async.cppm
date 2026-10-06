@@ -10,7 +10,7 @@ export module qextra:async;
 export import :executor;
 export import :task;
 export import :watcher;
-export import qt;
+export import qextra.qt;
 export import rstd.cppstd;
 
 using namespace rstd::prelude;

@@ -1,24 +1,17 @@
+module;
 #include "QExtra/image.hpp"
-#include "texture.hpp"
-#include <QtCore/QElapsedTimer>
-#include <QtCore/QPointer>
-#include <QtCore/QRunnable>
-#include <QtCore/QThread>
-#include <QtCore/QTimer>
-#include <QtQml/QQmlContext>
-#include <QtQml/QQmlInfo>
-#include <QtQuick/QSGImageNode>
-#include <QtQuick/QSGRendererInterface>
 
+module qextra;
+import :image;
+import :image.texture;
+import qextra.qt;
 import rstd;
-import qextra.image.service;
-import qextra.image.network;
-import qextra.image.playback;
 
 using namespace rstd::prelude;
 using rstd::sync::Arc;
 namespace wi = wavsen::image;
 
+extern "C++" {
 namespace qextra {
 
 ImageCache::ImageCache(QObject *parent) : QObject(parent) {}
@@ -975,3 +968,4 @@ void AnimatedImage::setSharedPlayback(bool value) {
   emit sharedPlaybackChanged();
 }
 } // namespace qextra
+}

@@ -1,16 +1,12 @@
 module;
 #include "QExtra/macro_qt.hpp"
-#include <QtCore/QObject>
-#include <QtCore/QPointer>
-#include <QtCore/QStringList>
-#include <QtCore/QVariantList>
 
 #ifdef Q_MOC_RUN
 #    include "QExtra/select_storage.moc"
 #endif
 
 export module qextra:select_storage;
-export import qt;
+export import qextra.qt;
 export import :kstore;
 
 export class SelectStorage : public QObject {

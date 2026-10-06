@@ -1,5 +1,5 @@
-export module qextra.image.service;
-import qt;
+export module qextra:image.service;
+import qextra.qt;
 export import wavsen.image;
 import rstd;
 

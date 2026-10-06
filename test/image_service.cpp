@@ -1,14 +1,14 @@
-#include <QtCore/QCoreApplication>
-#include <QtCore/QElapsedTimer>
-#include <QtCore/QThread>
+#include "tests.hpp"
+#include <QtCore/QDebug>
 #include <rstd/macro.hpp>
 
 import rstd;
-import qextra.image.service;
+import qextra;
 
 using namespace rstd::prelude;
 using namespace rstd::literals;
 
+namespace {
 template <typename F> bool until(F predicate) {
   QElapsedTimer timer;
   timer.start();
@@ -19,8 +19,9 @@ template <typename F> bool until(F predicate) {
   }
   return false;
 }
+} // namespace
 
-int main(int argc, char **argv) {
+int run_image_service(int argc, char **argv) {
   QCoreApplication app(argc, argv);
   for (int mib : {0, 64, 128, 256, 512}) {
     const auto bytes = usize(mib) * usize(1024 * 1024);
@@ -188,4 +189,5 @@ int main(int argc, char **argv) {
   qextra::image::clear_cache();
   rstd_assert(
       until([] { return qextra::image::statistics().live_bytes == usize(); }));
+  return 0;
 }
