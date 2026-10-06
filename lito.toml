@@ -56,4 +56,5 @@ sources = [
   "test/image_network.cpp",
   "test/image_playback.cpp",
   "test/kstore.cpp",
+  "test/bindable.cpp",
 ]

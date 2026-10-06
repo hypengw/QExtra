@@ -392,14 +392,17 @@ QT_END_NAMESPACE
     using QmlUsing ## ORIGINAL = ORIGINAL; \
     Q_CLASSINFO("QML.Using", #ORIGINAL)
 
-#ifndef Q_MOC_RUN
+#if !defined(Q_MOC_RUN) && !defined(Q_DECLARE_FLAGS)
 #    define Q_DECLARE_FLAGS(Flags, Enum) typedef QFlags<Enum> Flags;
 #endif
 
+#ifndef Q_DECLARE_INCOMPATIBLE_FLAGS
 #define Q_DECLARE_INCOMPATIBLE_FLAGS(Flags)                                              \
     constexpr inline QIncompatibleFlag operator|(Flags::enum_type f1, int f2) noexcept { \
         return QIncompatibleFlag(int(f1) | f2);                                          \
     }
+#endif
+#ifndef Q_DECLARE_OPERATORS_FOR_FLAGS
 #define Q_DECLARE_OPERATORS_FOR_FLAGS(Flags)                                            \
     constexpr inline QFlags<Flags::enum_type> operator|(Flags::enum_type f1,            \
                                                         Flags::enum_type f2) noexcept { \
@@ -410,7 +413,9 @@ QT_END_NAMESPACE
         return f2 | f1;                                                                 \
     }                                                                                   \
     Q_DECLARE_INCOMPATIBLE_FLAGS(Flags)
+#endif
 
+#ifndef Q_OBJECT_BINDABLE_PROPERTY
 #define Q_OBJECT_BINDABLE_PROPERTY(Class, Type, name, Signal) \
     static constexpr usize _qt_property_##name##_offset() { \
         QT_WARNING_PUSH QT_WARNING_DISABLE_INVALID_OFFSETOF \
@@ -418,6 +423,7 @@ QT_END_NAMESPACE
         QT_WARNING_POP \
     } \
     QObjectBindableProperty<Class, Type, Class::_qt_property_##name##_offset, Signal> name;
+#endif
 
 
 #define Q_CAST_IGNORE_ALIGN(body) QT_WARNING_PUSH QT_WARNING_DISABLE_GCC("-Wcast-align") body QT_WARNING_POP

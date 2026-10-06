@@ -17,6 +17,7 @@ constexpr TestGroup groups[] = {
     {"image-network", run_image_network},
     {"image-playback", run_image_playback},
     {"kstore", run_kstore},
+    {"bindable", run_bindable},
 };
 } // namespace
 
