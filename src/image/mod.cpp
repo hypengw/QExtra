@@ -122,16 +122,12 @@ public:
   QPointer<QQuickWindow> renderWindow;
   QMetaObject::Connection invalidationConnection;
   QMetaObject::Connection visibilityConnection;
-  QMetaObject::Connection animationConnection;
-  QList<QMetaObject::Connection> viewportConnections;
   bool inViewport{}, wakePending{};
   rstd::sync::atomic::Atomic<bool> invalidated;
 
   explicit ImagePrivate(Image *owner) : item(owner) {}
   ~ImagePrivate() {
     delete download;
-    for (auto connection : viewportConnections)
-      QObject::disconnect(connection);
     if (clock)
       clock->remove(item);
   }
@@ -169,30 +165,6 @@ public:
       inViewport = visible;
       wake();
     }
-  }
-  void observeViewport() {
-    for (auto connection : viewportConnections)
-      QObject::disconnect(connection);
-    viewportConnections.clear();
-    for (auto *parent = static_cast<QQuickItem *>(item); parent;
-         parent = parent->parentItem()) {
-      auto observe = [this, parent](auto signal) {
-        viewportConnections.push_back(QObject::connect(
-            parent, signal, item, [this] { refreshViewport(); }));
-      };
-      observe(&QQuickItem::xChanged);
-      observe(&QQuickItem::yChanged);
-      observe(&QQuickItem::widthChanged);
-      observe(&QQuickItem::heightChanged);
-      observe(&QQuickItem::rotationChanged);
-      observe(&QQuickItem::scaleChanged);
-      observe(&QQuickItem::transformOriginChanged);
-      observe(&QQuickItem::clipChanged);
-      viewportConnections.push_back(
-          QObject::connect(parent, &QQuickItem::parentChanged, item,
-                           [this] { observeViewport(); }));
-    }
-    refreshViewport();
   }
   void state(Image::Status value, QString message = {}) {
     if (status == value && error == message)
@@ -617,16 +589,16 @@ Image::Image(QQuickItem *parent)
     : QQuickItem(parent),
       d(rstd::move(Box<ImagePrivate>::make(this)).into_raw().as_raw_ptr()) {
   setFlag(ItemHasContents);
+  setFlag(ItemObservesViewport);
   connect(this, &QQuickItem::smoothChanged, this, &QQuickItem::update);
   connect(this, &QQuickItem::windowChanged, this, [this](QQuickWindow *window) {
     disconnect(d->invalidationConnection);
     disconnect(d->visibilityConnection);
-    disconnect(d->animationConnection);
     d->stopClock();
     releaseResources();
     d->renderWindow = window;
     if (!window) {
-      d->observeViewport();
+      d->refreshViewport();
       d->wake();
       return;
     }
@@ -646,9 +618,7 @@ Image::Image(QQuickItem *parent)
         Qt::DirectConnection);
     d->visibilityConnection = connect(window, &QWindow::visibilityChanged, this,
                                       [this] { d->wake(); });
-    d->animationConnection = connect(window, &QQuickWindow::afterAnimating,
-                                     this, [this] { d->refreshViewport(); });
-    d->observeViewport();
+    d->refreshViewport();
     if (!d->source.isEmpty())
       d->wake();
   });
@@ -659,14 +629,13 @@ Image::~Image() {
   disconnect(this, nullptr, this, nullptr);
   disconnect(d->invalidationConnection);
   disconnect(d->visibilityConnection);
-  disconnect(d->animationConnection);
   releaseResources();
   auto owner = Box<ImagePrivate>::from_raw(
       rstd::mut_ptr<ImagePrivate>::from_raw_parts(d));
 }
 void Image::componentComplete() {
   QQuickItem::componentComplete();
-  d->observeViewport();
+  d->refreshViewport();
   d->reload();
 }
 void Image::geometryChange(const QRectF &rect, const QRectF &old) {
@@ -676,8 +645,12 @@ void Image::geometryChange(const QRectF &rect, const QRectF &old) {
 }
 void Image::itemChange(ItemChange change, const ItemChangeData &value) {
   QQuickItem::itemChange(change, value);
-  if (change == ItemVisibleHasChanged && !d->source.isEmpty())
-    d->wake();
+  if (change == ItemTransformHasChanged || change == ItemParentHasChanged ||
+      change == ItemVisibleHasChanged) {
+    d->refreshViewport();
+    if (!d->source.isEmpty())
+      d->wake();
+  }
 }
 void Image::imageReady() { d->tick(); }
 void Image::releaseResources() {

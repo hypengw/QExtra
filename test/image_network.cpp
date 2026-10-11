@@ -318,6 +318,11 @@ Window {
     visible: true; width: 64; height: 64
     QE.AnimatedImage { objectName: "image"; anchors.fill: parent; maxSize: Qt.size(512, 512) }
     QE.AnimatedImage { objectName: "peer"; anchors.fill: parent; maxSize: Qt.size(512, 512); sharedPlayback: true; visible: false }
+    Item {
+        width: 64; height: 64
+        transform: Translate { objectName: "offset"; x: 128 }
+        QE.Image { objectName: "transformed"; anchors.fill: parent }
+    }
 })",
                     QUrl("qrc:/network.qml"));
   auto *root = component.create();
@@ -422,6 +427,18 @@ Window {
   image->setVisible(true);
   rstd_assert(
       wait_for([&] { return image->status() == qextra::Image::Ready; }));
+  auto *transformed = root->findChild<qextra::Image *>("transformed");
+  auto *offset = root->findChild<QObject *>("offset");
+  transformed->setSource(url("/still"));
+  wait_for([] { return false; }, 100);
+  const auto beforeTransform = factory.manager->requests;
+  offset->setProperty("x", 0);
+  for (int i = 0; i < 8; ++i)
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+  rstd_assert(factory.manager->requests == beforeTransform + 1);
+  rstd_assert(
+      wait_for([&] { return transformed->status() == qextra::Image::Ready; }));
+  transformed->setSource(QUrl());
   for (const auto &animation : animations) {
     gif = animation;
     load("/gif");
@@ -441,6 +458,7 @@ Window {
   image->setSource(url("/slow"));
   rstd_assert(wait_for([&] { return hits["/slow"] == 2; }));
   image->setSource(QUrl());
+  image->setPlaying(true);
   image->setSharedPlayback(true);
   image->setCache(false);
   peer->setVisible(true);
