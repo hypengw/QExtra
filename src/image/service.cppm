@@ -94,6 +94,7 @@ struct Key {
 
 struct State {
   QString path;
+  QString fileRoot;
   Option<wi::Source> input;
   Key key;
   bool animation;
@@ -104,10 +105,10 @@ struct State {
   wi::Cancellation cancellation;
   Mutex<Fields> fields;
   State(QString p, Option<wi::Source> source, Key k, bool a, bool cached,
-        wi::DecodeRequest s, wi::Cancellation c)
-      : path(rstd::move(p)), input(rstd::move(source)), key(rstd::move(k)),
-        animation(a), cache(cached), size(s), cancellation(rstd::move(c)),
-        fields(Fields{}) {}
+        wi::DecodeRequest s, wi::Cancellation c, QString root)
+      : path(rstd::move(p)), fileRoot(rstd::move(root)),
+        input(rstd::move(source)), key(rstd::move(k)), animation(a),
+        cache(cached), size(s), cancellation(rstd::move(c)), fields(Fields{}) {}
 };
 
 export struct Poll {
@@ -358,7 +359,16 @@ struct Service {
     }
   }
 
-  auto source(const QString &path) -> Result<wi::Source, wi::Error> {
+  auto source(QString path, const QString &root)
+      -> Result<wi::Source, wi::Error> {
+    if (!root.isEmpty()) {
+      const auto allowed = QFileInfo(root).canonicalFilePath();
+      const auto resolved = QFileInfo(path).canonicalFilePath();
+      if (allowed.isEmpty() || resolved.isEmpty() ||
+          !resolved.startsWith(allowed + QLatin1Char('/')))
+        return Err(wi::Error::Io);
+      path = resolved;
+    }
     auto bytes = path.toUtf8();
     auto text = rstd::str_::from_utf8(slice<u8>::from_raw_parts(
         reinterpret_cast<const rstd::byte *>(bytes.constData()),
@@ -422,8 +432,8 @@ struct Service {
         session = None();
       }
       if (!session) {
-        auto input =
-            state->input ? Ok(state->input->clone()) : source(state->path);
+        auto input = state->input ? Ok(state->input->clone())
+                                  : source(state->path, state->fileRoot);
         if (input.is_err())
           error = Some(input.unwrap_err_unchecked());
         else {
@@ -540,6 +550,12 @@ public:
     return create(rstd::move(path), None(), size, animation, cache, context,
                   initialFrame);
   }
+  static auto open_file(QString path, QString root, wi::DecodeRequest size,
+                        bool animation = false, quint64 context = 0,
+                        int initialFrame = 0) -> Result<Request, wi::Error> {
+    return create(rstd::move(path), None(), size, animation, false, context,
+                  initialFrame, rstd::move(root));
+  }
   static auto open_source(QString identity, wi::Source input,
                           wi::DecodeRequest size, bool animation = false,
                           bool cache = true, quint64 context = 0,
@@ -551,7 +567,7 @@ public:
 private:
   static auto create(QString path, Option<wi::Source> input,
                      wi::DecodeRequest size, bool animation, bool cache,
-                     quint64 context, int initialFrame)
+                     quint64 context, int initialFrame, QString root = {})
       -> Result<Request, wi::Error> {
     auto &s = service();
     auto key = Service::key(path, size, context, initialFrame, input.is_some());
@@ -581,9 +597,9 @@ private:
     if (cancellation.is_err()) {
       return Err(wi::Error::ResourceLimit);
     }
-    auto state = Arc<State>::try_make(rstd::move(path), rstd::move(input),
-                                      rstd::move(key), animation, cache, size,
-                                      cancellation.unwrap_unchecked());
+    auto state = Arc<State>::try_make(
+        rstd::move(path), rstd::move(input), rstd::move(key), animation, cache,
+        size, cancellation.unwrap_unchecked(), rstd::move(root));
     if (state.is_err()) {
       return Err(wi::Error::ResourceLimit);
     }

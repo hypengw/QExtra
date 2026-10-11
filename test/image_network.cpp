@@ -158,6 +158,21 @@ void test_queue() {
 int run_image_network(int argc, char **argv) {
   QGuiApplication app(argc, argv);
   test_queue();
+  QTemporaryDir files, outside;
+  rstd_assert(files.isValid() && outside.isValid());
+  auto write = [](QString path, QByteArray bytes) {
+    QFile file(path);
+    rstd_assert(file.open(QIODevice::WriteOnly));
+    rstd_assert(file.write(bytes) == bytes.size());
+  };
+  const auto fileImage = files.filePath("image.ppm");
+  write(fileImage,
+        QByteArray("P6\n1 1\n255\n") + QByteArray::fromHex("ff0000"));
+  const auto outsideImage = outside.filePath("outside.ppm");
+  write(outsideImage,
+        QByteArray("P6\n1 1\n255\n") + QByteArray::fromHex("0000ff"));
+  write(files.filePath("bad.ppm"), "not an image");
+  rstd_assert(QFile::link(outsideImage, files.filePath("escape.ppm")));
   QByteArray gif;
   QList<QByteArray> animations;
   for (int i = 1; i < argc; ++i) {
@@ -194,6 +209,50 @@ int run_image_network(int argc, char **argv) {
         body += path == "/changing" && blue ? QByteArray::fromHex("0000ff")
                                             : QByteArray::fromHex("ff0000");
         QByteArray status("200 OK"), extra;
+        if (path.startsWith("/file") || path == "/outside" ||
+            path == "/escape") {
+          auto target = path == "/outside"  ? outsideImage
+                        : path == "/escape" ? files.filePath("escape.ppm")
+                        : path == "/file-missing"
+                            ? files.filePath("missing.ppm")
+                        : path == "/file-bad" ? files.filePath("bad.ppm")
+                                              : fileImage;
+          extra = "QExtra-Image-Source: " +
+                  QUrl::fromLocalFile(target).toEncoded() + "\r\n";
+          body.clear();
+          if (path == "/file-error")
+            status = "404 Not Found";
+          if (path == "/file-duplicate")
+            extra += extra;
+          if (path == "/file-query")
+            extra = "QExtra-Image-Source: " +
+                    QUrl::fromLocalFile(target).toEncoded() + "?query\r\n";
+          if (path == "/file-relative")
+            extra = "QExtra-Image-Source: image.ppm\r\n";
+          if (path == "/file-long")
+            extra = "QExtra-Image-Source: file:///" + QByteArray(16384, 'x') +
+                    "\r\n";
+          if (path == "/file-slow") {
+            socket->write("HTTP/1.1 200 OK\r\n" + extra +
+                          "Content-Length: 100000\r\n\r\n");
+            return;
+          }
+        }
+        if (path == "/redirect-file" || path == "/redirect-loop") {
+          status = "302 Found";
+          extra = path == "/redirect-file" ? "Location: /file\r\n"
+                                           : "Location: /redirect-loop\r\n";
+          body.clear();
+        }
+        if (path == "/redirect-external" || path == "/return-local") {
+          auto target =
+              url(path == "/redirect-external" ? "/return-local" : "/file");
+          if (path == "/redirect-external")
+            target.setHost(QStringLiteral("localhost"));
+          status = "302 Found";
+          extra = "Location: " + target.toEncoded() + "\r\n";
+          body.clear();
+        }
         if (path == "/gif")
           body = gif;
         if (path == "/cached")
@@ -295,6 +354,32 @@ Window {
                         : c.red() > 240 && c.blue() < 10;
     });
   };
+  load("/file", qextra::Image::Error);
+  rstd_assert(
+      qextra::image::set_local_file_source(engine, url(""), files.path()));
+  load("/file");
+  rstd_assert(image->source() == url("/file") && color(false));
+  load("/file-slow");
+  rstd_assert(color(false));
+  load("/redirect-file");
+  rstd_assert(color(false));
+  load("/file-missing", qextra::Image::Error);
+  load("/file-bad", qextra::Image::Error);
+  load("/file-error", qextra::Image::Error);
+  load("/file-duplicate", qextra::Image::Error);
+  load("/file-query", qextra::Image::Error);
+  load("/file-relative", qextra::Image::Error);
+  load("/file-long", qextra::Image::Error);
+  load("/redirect-external", qextra::Image::Error);
+  load("/outside", qextra::Image::Error);
+  load("/escape", qextra::Image::Error);
+  load("/redirect-loop", qextra::Image::Error);
+  write(fileImage,
+        QByteArray("P6\n1 1\n255\n") + QByteArray::fromHex("0000ff"));
+  load("/file");
+  rstd_assert(color(true));
+  rstd_assert(qextra::image::set_local_file_source(engine, QUrl(), QString()));
+  load("/file", qextra::Image::Error);
   load("/still");
   rstd_assert(factory.manager && factory.manager->requests > 0);
   rstd_assert(image->sourceSize() == QSize(1, 1) && image->progress() == 1);

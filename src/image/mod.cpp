@@ -96,6 +96,7 @@ public:
   image::NetworkLoad *download{};
   Option<wi::Source> networkInput;
   QString networkIdentity;
+  Option<image::FileTarget> networkFile;
   qreal progress{};
   QSize requested;
   QSize maximum;
@@ -321,6 +322,13 @@ public:
     }
     state(Image::Loading);
     if (!networkUrl.isEmpty()) {
+      if (networkFile) {
+        networkUrl = QUrl();
+        start(image::Request::open_file(networkFile->path, networkFile->root,
+                                        decodeSize(), animated, contextId,
+                                        seekFrame));
+        return;
+      }
       if (networkInput) {
         networkUrl = QUrl();
         start(image::Request::open_source(
@@ -463,20 +471,31 @@ public:
         fail(error);
         return;
       }
-      auto identity = download->identity();
-      auto input = download->take_source();
-      delete download;
-      download = nullptr;
-      networkUrl = QUrl();
-      if (input.is_err()) {
-        fail(QStringLiteral("Cannot read downloaded image"));
-        return;
+      auto file = download->take_file();
+      if (file) {
+        networkFile = rstd::move(file);
+        delete download;
+        download = nullptr;
+        networkUrl = QUrl();
+        start(image::Request::open_file(networkFile->path, networkFile->root,
+                                        decodeSize(), animated, contextId,
+                                        seekFrame));
+      } else {
+        auto identity = download->identity();
+        auto input = download->take_source();
+        delete download;
+        download = nullptr;
+        networkUrl = QUrl();
+        if (input.is_err()) {
+          fail(QStringLiteral("Cannot read downloaded image"));
+          return;
+        }
+        networkIdentity = rstd::move(identity);
+        networkInput = Some(input.unwrap_unchecked());
+        start(image::Request::open_source(
+            networkIdentity, networkInput->clone(), decodeSize(), animated,
+            cache, contextId, seekFrame));
       }
-      networkIdentity = rstd::move(identity);
-      networkInput = Some(input.unwrap_unchecked());
-      start(image::Request::open_source(networkIdentity, networkInput->clone(),
-                                        decodeSize(), animated, cache,
-                                        contextId, seekFrame));
     }
     if (playback) {
       auto result = playback->snapshot();
@@ -765,6 +784,7 @@ void Image::setSource(const QUrl &value) {
   if (isComponentComplete())
     d->independentControl = false;
   d->networkInput = None();
+  d->networkFile = None();
   d->networkIdentity.clear();
   d->resumeRemaining = None();
   if (isComponentComplete())

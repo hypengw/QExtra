@@ -42,6 +42,17 @@ struct Impl<io::ReadAt, qextra::image::EncodedInput>
 } // namespace rstd
 
 namespace qextra::image {
+export struct FileTarget {
+  QString path;
+  QString root;
+};
+
+bool same_origin(const QUrl &a, const QUrl &b) {
+  return a.scheme() == b.scheme() && a.host() == b.host() &&
+         a.port(a.scheme() == QLatin1String("https") ? 443 : 80) ==
+             b.port(b.scheme() == QLatin1String("https") ? 443 : 80);
+}
+
 export class NetworkLoad;
 
 class NetworkQueue : public QObject {
@@ -50,6 +61,8 @@ class NetworkQueue : public QObject {
   Vec<NetworkLoad *> active_{Vec<NetworkLoad *>::make()};
   bool scheduled_{};
   bool closing_{};
+  QUrl fileOrigin_;
+  QString fileRoot_;
 
   void schedule();
   void shutdown();
@@ -60,6 +73,9 @@ public:
   static NetworkQueue *get(QQmlEngine *engine);
   void enqueue(NetworkLoad *load);
   void release(NetworkLoad *load);
+  bool configure_files(QUrl origin, QString directory);
+  QUrl file_origin() const { return fileOrigin_; }
+  QString file_root() const { return fileRoot_; }
 };
 
 export class NetworkLoad : public QObject {
@@ -70,6 +86,10 @@ export class NetworkLoad : public QObject {
   EncodedInput input_;
   QCryptographicHash hash_{QCryptographicHash::Sha256};
   QUrl url_;
+  QUrl fileOrigin_;
+  QString fileRoot_;
+  Option<FileTarget> fileTarget_;
+  bool fileAllowed_{};
   QString error_;
   bool done_{};
   bool notified_{};
@@ -108,9 +128,45 @@ export class NetworkLoad : public QObject {
       queue_->release(this);
     notify();
   }
+  void complete_file(const QByteArray &encoded) {
+    auto target = QUrl::fromEncoded(encoded, QUrl::StrictMode);
+    const auto path = QDir::cleanPath(target.toLocalFile());
+    if (!fileAllowed_ || !same_origin(reply_->url(), fileOrigin_) ||
+        !target.isValid() || !target.isLocalFile() ||
+        (!target.host().isEmpty() &&
+         target.host() != QLatin1String("localhost")) ||
+        !target.userInfo().isEmpty() || target.hasQuery() ||
+        target.hasFragment() || !QDir::isAbsolutePath(path) ||
+        !path.startsWith(fileRoot_ + QLatin1Char('/'))) {
+      stop(u"Local image source is not allowed"_s);
+      return;
+    }
+    fileTarget_ = Some(FileTarget{path, fileRoot_});
+    done_ = true;
+    timeout_.stop();
+    QObject::disconnect(reply_, nullptr, this, nullptr);
+    reply_->abort();
+    reply_->deleteLater();
+    reply_ = nullptr;
+    input_ = EncodedInput{};
+    if (queue_)
+      queue_->release(this);
+    notify();
+  }
   void headers() {
     if (done_ || !reply_)
       return;
+    const auto targets = reply_->headers().values("QExtra-Image-Source");
+    if (!targets.isEmpty()) {
+      if (targets.size() != 1 || targets[0].size() > 16384 ||
+          reply_->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() !=
+              200) {
+        stop(u"Invalid local image source response"_s);
+        return;
+      }
+      complete_file(targets[0]);
+      return;
+    }
     const auto limit = wi::Limits{}.encoded_bytes;
     auto declared =
         reply_->header(QNetworkRequest::ContentLengthHeader).toLongLong();
@@ -189,7 +245,13 @@ export class NetworkLoad : public QObject {
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                          QNetworkRequest::NoLessSafeRedirectPolicy);
     request.setMaximumRedirectsAllowed(10);
+    if (fileAllowed_)
+      request.setRawHeader("QExtra-Image-Transport", "file-v1");
     reply_ = engine->networkAccessManager()->get(request);
+    QObject::connect(
+        reply_, &QNetworkReply::redirected, this, [this](const QUrl &target) {
+          fileAllowed_ = fileAllowed_ && same_origin(target, fileOrigin_);
+        });
     reply_->setReadBufferSize(chunk_bytes);
     QObject::connect(reply_, &QNetworkReply::readyRead, this,
                      [this] { read(); });
@@ -213,10 +275,12 @@ public:
   NetworkLoad(QQmlEngine *engine, QUrl url, QObject *receiver)
       : QObject(receiver), queue_(NetworkQueue::get(engine)),
         receiver_(receiver), url_(rstd::move(url)) {
+    fileOrigin_ = queue_->file_origin();
+    fileRoot_ = queue_->file_root();
+    fileAllowed_ = !fileRoot_.isEmpty() && same_origin(url_, fileOrigin_);
     timeout_.setSingleShot(true);
-    QObject::connect(&timeout_, &QTimer::timeout, this, [this] {
-      stop(u"Image download timed out"_s);
-    });
+    QObject::connect(&timeout_, &QTimer::timeout, this,
+                     [this] { stop(u"Image download timed out"_s); });
     queue_->enqueue(this);
   }
   ~NetworkLoad() override {
@@ -239,6 +303,7 @@ public:
     return url_.toString(QUrl::FullyEncoded) + QLatin1Char('\n') +
            QString::fromLatin1(hash_.result().toHex());
   }
+  auto take_file() -> Option<FileTarget> { return fileTarget_.take(); }
   auto take_source() -> Result<wi::Source, wi::Error> {
     if (!done_ || !error_.isEmpty() || input_.length == usize())
       return Err(wi::Error::InvalidInput);
@@ -311,5 +376,30 @@ void NetworkQueue::shutdown() {
     (*load)->stop(u"Image network engine was destroyed"_s);
   while (auto load = active_.pop())
     (*load)->stop(u"Image network engine was destroyed"_s);
+}
+} // namespace qextra::image
+
+namespace qextra::image {
+bool NetworkQueue::configure_files(QUrl origin, QString directory) {
+  if (!origin.isEmpty() &&
+      (!origin.isValid() ||
+       (origin.scheme() != QLatin1String("http") &&
+        origin.scheme() != QLatin1String("https")) ||
+       !origin.userInfo().isEmpty() || origin.hasQuery() ||
+       origin.hasFragment() ||
+       (!origin.path().isEmpty() && origin.path() != QLatin1String("/")) ||
+       !QDir::isAbsolutePath(directory)))
+    return false;
+  fileOrigin_ = rstd::move(origin);
+  fileRoot_ = fileOrigin_.isEmpty() ? QString() : QDir::cleanPath(directory);
+  return true;
+}
+
+export bool set_local_file_source(QQmlEngine *engine, QUrl origin,
+                                  QString directory) {
+  if (!engine || engine->thread() != QThread::currentThread())
+    return false;
+  return NetworkQueue::get(engine)->configure_files(rstd::move(origin),
+                                                    rstd::move(directory));
 }
 } // namespace qextra::image
