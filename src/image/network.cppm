@@ -18,25 +18,24 @@ struct EncodedInput {
 namespace rstd {
 template <>
 struct Impl<io::ReadAt, qextra::image::EncodedInput>
-    : ImplBase<qextra::image::EncodedInput> {
-  auto read_at(mut_ref<u8[]> target, u64 offset) const -> io::Result<usize> {
+    : DefaultInImpl<io::ReadAt, qextra::image::EncodedInput> {
+  auto read_buf_at(io::BorrowedCursor target, u64 offset) const -> io::Result<empty> {
     const auto &input = this->self();
     if (offset >= u64(input.length.to_primitive()))
-      return Ok(usize());
+      return Ok(empty {});
     auto position = usize(offset.to_primitive());
-    auto length = target.len().min(input.length - position);
+    auto length = target.capacity().min(input.length - position);
     usize copied;
     while (copied < length) {
       auto index = position / usize(qextra::image::chunk_bytes);
       auto within = position % usize(qextra::image::chunk_bytes);
       auto count =
           (length - copied).min(usize(qextra::image::chunk_bytes) - within);
-      mem::memcpy(target.as_raw_ptr() + copied.to_primitive(),
-                  input.chunks[index].data() + within.to_primitive(), count);
+      target.append(slice<u8>::from_raw_parts(reinterpret_cast<const byte*>(input.chunks[index].data() + within.to_primitive()), count));
       copied += count;
       position += count;
     }
-    return Ok(copied);
+    return Ok(empty {});
   }
 };
 } // namespace rstd
