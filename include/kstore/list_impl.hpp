@@ -352,7 +352,7 @@ public:
           m_notify_handle(0) {}
 
     ~ListImpl() {
-        m_store->store_unreg_notify(m_notify_handle);
+        if (m_store) m_store->store_unreg_notify(m_notify_handle);
         _reset_impl();
     }
 
@@ -378,6 +378,11 @@ public:
     T const* query(param_type<key_type> key) const { return m_store->store_query(key); }
 
     void set_store(QAbstractListModel* self, store_type store) {
+        if (m_store && *m_store == store) return;
+        if (m_store) {
+            m_store->store_unreg_notify(m_notify_handle);
+            if (!m_order.empty()) self->removeRows(0, static_cast<int>(m_order.size()));
+        }
         m_store = store;
 
         // TODO: no void*

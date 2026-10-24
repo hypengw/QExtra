@@ -16,6 +16,9 @@ export class Query : public QAsyncResult {
 public:
     Query(QObject* parent = nullptr);
     ~Query();
+    quint64 beginRequest() { return ++m_request_revision; }
+    bool isCurrentRequest(quint64 revision) const { return revision == m_request_revision; }
+    void invalidateRequests() { ++m_request_revision; cancel(); }
 
     Q_SLOT void   delayReload();
     auto          delay() const -> bool;
@@ -44,6 +47,7 @@ protected:
     }
 
 private:
+    quint64 m_request_revision {};
     QTimer    m_timer;
     bool      m_delay;
     QDateTime m_last;

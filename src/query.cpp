@@ -12,6 +12,7 @@ Query::Query(QObject* parent): QAsyncResult(parent), m_delay(true) {
 Query::~Query() {}
 
 void Query::delayReload() {
+    invalidateRequests();
     if (delay()) {
         m_timer.setInterval(100);
         m_timer.start();
@@ -29,7 +30,11 @@ void Query::setDelay(bool v) {
 }
 
 QueryList::QueryList(QObject* parent)
-    : Query(parent), m_offset(0), m_limit(200), m_sort(0), m_asc(true), m_no_more(false) {}
+    : Query(parent), m_offset(0), m_limit(200), m_sort(0), m_asc(true), m_no_more(false) {
+    connect(this, &QueryList::sortChanged, this, &Query::invalidateRequests);
+    connect(this, &QueryList::ascChanged, this, &Query::invalidateRequests);
+    connect(this, &QueryList::limitChanged, this, &Query::invalidateRequests);
+}
 
 QueryList::~QueryList() {}
 auto QueryList::offset() const noexcept -> qint32 { return m_offset; }

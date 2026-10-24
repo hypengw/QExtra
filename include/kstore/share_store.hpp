@@ -4,9 +4,11 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <vector>
 
 #include "kstore/item_trait.hpp"
 #include "kstore/rc.hpp"
+#include "kstore/subscription.hpp"
 
 namespace kstore
 {
@@ -51,12 +53,16 @@ public:
     StoreItem(const StoreItem& o): m_store(o.m_store), m_key(o.m_key) { increase(); }
     StoreItem(StoreItem&& o) noexcept: m_store(o.m_store), m_key(o.m_key) { o.m_key = {}; }
     StoreItem& operator=(const StoreItem& o) {
+        if (this == &o) return *this;
+        release();
         m_store = o.m_store;
         m_key   = o.m_key;
         increase();
         return *this;
     }
     StoreItem& operator=(StoreItem&& o) noexcept {
+        if (this == &o) return *this;
+        release();
         m_store = o.m_store;
         m_key   = o.m_key;
         o.m_key = {};
@@ -67,13 +73,11 @@ public:
         return m_key == o.m_key && m_store == o.m_store;
     }
 
-    ~StoreItem() {
-        if (m_key) m_store.store_remove(*m_key);
-    }
+    ~StoreItem() { release(); }
 
     auto item() const -> T* { return store_query(); }
     auto operator*() const -> T& { return *store_query(); }
-    auto operator->() const -> T* { return *store_query(); }
+    auto operator->() const -> T* { return store_query(); }
          operator bool() const { return store_query() != nullptr; }
 
     auto key() const { return m_key; }
@@ -85,6 +89,10 @@ public:
     }
 
 private:
+    void release() {
+        if (m_key) m_store.store_remove(*m_key);
+        m_key.reset();
+    }
     auto store_query() const -> T* {
         if (m_key) {
             return m_store.store_query(*m_key);
@@ -166,9 +174,14 @@ struct ShareStore {
 
     template<typename Range>
     void store_changed_callback(const Range& range, std::int64_t ignore_handle = 0) {
-        for (auto& el : inner->callbacks) {
-            if (el.first == ignore_handle) continue;
-            el.second(range);
+        std::vector<handle_type> handles;
+        for (auto& [handle, _] : inner->callbacks) handles.push_back(handle);
+        for (auto handle : handles) {
+            if (handle == ignore_handle) continue;
+            if (auto it = inner->callbacks.find(handle); it != inner->callbacks.end()) {
+                auto callback = it->second;
+                callback(range);
+            }
         }
     }
 
@@ -176,13 +189,18 @@ struct ShareStore {
         bool changed { false };
         auto key = ItemTrait<T>::key(item);
         if (auto it = inner->map.find(key); it != inner->map.end()) {
-            it->second.item = item;
+            if constexpr (requires { item == it->second.item; }) {
+                changed = !(it->second.item == item);
+            } else {
+                changed = true;
+            }
+            if (changed) it->second.item = item;
             // for store item
             it->second.increase();
 
-            changed = true;
         } else {
-            inner->map.insert(std::pair { key, inner_item_type { item, 2 } });
+            inner->map.insert(std::pair { key, inner_item_type { item, 1 } });
+            changed = true;
         }
 
         return { { *this, key }, changed };
@@ -215,6 +233,18 @@ struct ShareStore {
         return handle;
     }
     void store_unreg_notify(handle_type handle) { inner->callbacks.erase(handle); }
+
+    auto subscribe(key_type key, callback_type callback) -> Subscription {
+        auto handle = store_reg_notify([key, callback = std::move(callback)](auto keys) {
+            for (auto changed : keys) {
+                if (changed == key) {
+                    callback(keys);
+                    break;
+                }
+            }
+        });
+        return Subscription([store = *this, handle]() mutable { store.store_unreg_notify(handle); });
+    }
 
     // extend
     auto query_extend(kstore::param_type<key_type> key) -> TItemExtend*
