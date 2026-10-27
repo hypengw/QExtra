@@ -1,8 +1,10 @@
 #pragma once
 
 #include <QtCore/QUrl>
+#include <QtCore/QVariantMap>
 #include <QtQml/qqmlregistration.h>
 #include <QtQuick/QQuickItem>
+#include <QtQuick/QQuickWindow>
 
 namespace qextra {
 class ImagePrivate;
@@ -17,6 +19,9 @@ public:
   explicit ImageCache(QObject *parent = nullptr);
   int capacityMiB() const;
   void setCapacityMiB(int);
+  Q_INVOKABLE bool setTextureCapacityMiB(QQuickWindow *, int);
+  Q_INVOKABLE void trimTextures(QQuickWindow *);
+  Q_INVOKABLE QVariantMap textureStatistics(QQuickWindow *) const;
 signals:
   void capacityMiBChanged();
 };
@@ -49,7 +54,13 @@ class Image : public QQuickItem {
   Q_PROPERTY(int currentFrame READ currentFrame WRITE setCurrentFrame NOTIFY
                  currentFrameChanged)
   Q_PROPERTY(int frameCount READ frameCount NOTIFY frameCountChanged)
+  Q_PROPERTY(LoadingMode loadingMode READ loadingMode WRITE setLoadingMode
+                 NOTIFY loadingModeChanged)
+  Q_PROPERTY(QQuickItem *preparationScope READ preparationScope WRITE
+                 setPreparationScope NOTIFY preparationScopeChanged)
 public:
+  enum LoadingMode { Automatic, Prefetch, Suspended };
+  Q_ENUM(LoadingMode)
   enum Status { Null, Ready, Loading, Error };
   Q_ENUM(Status)
   enum FillMode {
@@ -75,6 +86,10 @@ public:
   };
   Q_ENUM(VAlignment)
 
+  LoadingMode loadingMode() const;
+  void setLoadingMode(LoadingMode);
+  QQuickItem *preparationScope() const;
+  void setPreparationScope(QQuickItem *);
   explicit Image(QQuickItem *parent = nullptr);
   ~Image() override;
   QUrl source() const;
@@ -109,6 +124,8 @@ public:
   QSGTextureProvider *textureProvider() const override;
 
 signals:
+  void loadingModeChanged();
+  void preparationScopeChanged();
   void sourceChanged();
   void statusChanged();
   void progressChanged();

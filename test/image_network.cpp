@@ -158,6 +158,30 @@ void test_queue() {
   rstd_assert(coalesced.manager->active == 1);
   delete secondLoad;
   rstd_assert(coalesced.manager->active == 0);
+  ControlledFactory priorityFactory;
+  QQmlEngine priorityEngine;
+  priorityEngine.setNetworkAccessManagerFactory(&priorityFactory);
+  QList<qextra::image::NetworkLoad *> preparation;
+  for (int i = 0; i < 10; ++i) {
+    auto *load =
+        new qextra::image::NetworkLoad(&priorityEngine, url(40 + i), nullptr);
+    load->set_prefetch(true);
+    preparation.append(load);
+  }
+  rstd_assert(wait_for([&] {
+    return priorityFactory.manager && priorityFactory.manager->active == 6;
+  }));
+  rstd_assert(priorityFactory.manager->started.size() == 6);
+  preparation[0]->set_prefetch(false);
+  rstd_assert(wait_for([&] { return priorityFactory.manager->active == 7; }));
+  rstd_assert(priorityFactory.manager->started.last() == url(40));
+  auto *visibleLoad =
+      new qextra::image::NetworkLoad(&priorityEngine, url(100), nullptr);
+  rstd_assert(wait_for([&] { return priorityFactory.manager->active == 8; }));
+  rstd_assert(priorityFactory.manager->started.count(url(40)) == 1);
+  delete visibleLoad;
+  qDeleteAll(preparation);
+  rstd_assert(priorityFactory.manager->active == 0);
   qInfo()
       << "network queue engine isolation, limit, order and cancellation passed";
 }

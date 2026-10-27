@@ -52,6 +52,7 @@ name = "qextra-tests"
 sources = [
   "test/main.cpp",
   "test/image.cpp",
+  "test/image_texture.cpp",
   "test/image_service.cpp",
   "test/image_network.cpp",
   "test/image_playback.cpp",

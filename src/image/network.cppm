@@ -77,7 +77,10 @@ class NetworkQueue : public QObject {
   NetworkStatistics statistics_;
   QHash<QUrl, QWeakPointer<NetworkTransfer>> transfers_;
 
+public:
   void schedule();
+
+private:
   void shutdown();
 
 public:
@@ -116,7 +119,12 @@ class NetworkTransfer : public QObject {
   friend class NetworkQueue;
   QPointer<NetworkQueue> queue_;
   QPointer<QNetworkReply> reply_;
-  QList<QPointer<QObject>> receivers_;
+  struct Subscriber {
+    QObject *token;
+    QPointer<QObject> receiver;
+    bool prefetch{};
+  };
+  QList<Subscriber> receivers_;
   Option<wi::Source> source_;
   EncodedInput input_;
   ncq::ResourceRequest resource_;
@@ -149,9 +157,9 @@ class NetworkTransfer : public QObject {
         this,
         [this] {
           notified_ = false;
-          for (auto receiver : receivers_)
-            if (receiver)
-              QMetaObject::invokeMethod(receiver, "imageReady",
+          for (const auto &subscriber : receivers_)
+            if (subscriber.receiver)
+              QMetaObject::invokeMethod(subscriber.receiver, "imageReady",
                                         Qt::QueuedConnection);
         },
         Qt::QueuedConnection);
@@ -352,11 +360,29 @@ public:
     if (queue_)
       queue_->release(this);
   }
-  void subscribe(QObject *receiver) {
+  void subscribe(QObject *token, QObject *receiver) {
     shared_ |= !receivers_.isEmpty();
-    receivers_.append(receiver);
+    receivers_.append({token, receiver, false});
   }
-  void unsubscribe(QObject *receiver) { receivers_.removeOne(receiver); }
+  void unsubscribe(QObject *token) {
+    receivers_.removeIf(
+        [token](const auto &subscriber) { return subscriber.token == token; });
+    if (queue_)
+      queue_->schedule();
+  }
+  bool prefetch() const {
+    for (const auto &subscriber : receivers_)
+      if (!subscriber.prefetch)
+        return false;
+    return true;
+  }
+  void set_prefetch(QObject *token, bool value) {
+    for (auto &subscriber : receivers_)
+      if (subscriber.token == token)
+        subscriber.prefetch = value;
+    if (queue_)
+      queue_->schedule();
+  }
   bool done() const { return done_; }
   QString error() const { return error_; }
   qreal progress() const {
@@ -417,15 +443,14 @@ public:
 
 export class NetworkLoad : public QObject {
   QSharedPointer<NetworkTransfer> transfer_;
-  QPointer<QObject> receiver_;
 
 public:
   NetworkLoad(QQmlEngine *engine, QUrl url, QObject *receiver)
-      : QObject(receiver), transfer_(NetworkQueue::get(engine)->transfer(url)),
-        receiver_(receiver) {
-    transfer_->subscribe(receiver);
+      : QObject(receiver), transfer_(NetworkQueue::get(engine)->transfer(url)) {
+    transfer_->subscribe(this, receiver);
   }
-  ~NetworkLoad() override { transfer_->unsubscribe(receiver_); }
+  ~NetworkLoad() override { transfer_->unsubscribe(this); }
+  void set_prefetch(bool value) { transfer_->set_prefetch(this, value); }
   bool done() const { return transfer_->done(); }
   QString error() const { return transfer_->error(); }
   qreal progress() const { return transfer_->progress(); }
@@ -508,7 +533,16 @@ void NetworkQueue::schedule() {
       [this] {
         scheduled_ = false;
         while (!closing_ && active_.len() < usize(8) && !waiting_.is_empty()) {
-          auto *load = waiting_.pop().unwrap();
+          Option<usize> selected;
+          for (usize i; i < waiting_.len(); ++i)
+            if (!waiting_[i]->prefetch())
+              selected = Some(i);
+          if (!selected) {
+            if (active_.len() >= usize(6))
+              break;
+            selected = Some(waiting_.len() - usize(1));
+          }
+          auto *load = waiting_.remove(*selected);
           active_.emplace_back(load);
           load->start(engine_);
         }

@@ -13,6 +13,7 @@ struct TestGroup {
 
 constexpr TestGroup groups[] = {
     {"image", run_image},
+    {"image-texture", run_image_texture},
     {"image-service", run_image_service},
     {"image-network", run_image_network},
     {"image-playback", run_image_playback},

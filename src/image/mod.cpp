@@ -27,6 +27,27 @@ void ImageCache::setCapacityMiB(int value) {
   emit capacityMiBChanged();
 }
 
+bool ImageCache::setTextureCapacityMiB(QQuickWindow *window, int value) {
+  if (value < 0 || value > image::maximum_cache_mib)
+    return false;
+  return image::set_texture_cache_limit(window, quint64(value) * 1024 * 1024);
+}
+void ImageCache::trimTextures(QQuickWindow *window) {
+  image::trim_texture_cache(window);
+}
+QVariantMap ImageCache::textureStatistics(QQuickWindow *window) const {
+  const auto s = image::texture_statistics(window);
+  return {{"allocations", s.allocations},
+          {"uploads", s.uploads},
+          {"hits", s.hits},
+          {"evictions", s.evictions},
+          {"activeBytes", s.active_bytes},
+          {"idleBytes", s.idle_bytes},
+          {"pendingReleaseBytes", s.pending_release_bytes},
+          {"limit", s.limit},
+          {"generation", s.generation}};
+}
+
 static qreal now() { return image::playback_time(); }
 
 class ImageClock final : public QObject {
@@ -118,7 +139,13 @@ public:
   Option<image::Playback> playback;
   bool sharedPlayback{}, independentControl{};
   Option<Arc<image::Frame>> candidate;
+  Image::LoadingMode loadingMode{Image::Automatic};
+  QPointer<QQuickItem> preparationScope;
+  QList<QMetaObject::Connection> scopeConnections;
   QImage pending;
+  quint64 displayId{};
+  bool textureRetained{};
+  QSharedPointer<TextureState> textures;
   ImageProvider *provider{};
   QPointer<QQuickWindow> renderWindow;
   QMetaObject::Connection invalidationConnection;
@@ -165,6 +192,7 @@ public:
     const bool visible = !area.isEmpty();
     if (inViewport != visible) {
       inViewport = visible;
+      item->update();
       wake();
     }
   }
@@ -199,9 +227,25 @@ public:
     item->update();
   }
   bool active() const {
-    return inViewport && item->isVisible() && item->window() &&
-           item->window()->isVisible() &&
+    return loadingMode != Image::Suspended && inViewport && item->isVisible() &&
+           item->window() && item->window()->isVisible() &&
            item->window()->visibility() != QWindow::Minimized;
+  }
+  bool preparing() const {
+    if (loadingMode != Image::Prefetch || !preparationScope ||
+        !item->window() || !item->isVisible() || !item->window()->isVisible() ||
+        item->window()->visibility() == QWindow::Minimized ||
+        !preparationScope->isAncestorOf(item))
+      return false;
+    auto *root = item->window()->contentItem();
+    auto area =
+        preparationScope->mapRectToItem(root, preparationScope->boundingRect())
+            .intersected(root->boundingRect());
+    for (auto *p = preparationScope->parentItem(); p && !area.isEmpty();
+         p = p->parentItem())
+      if (p->clip())
+        area = area.intersected(p->mapRectToItem(root, p->clipRect()));
+    return !area.isEmpty();
   }
   bool wantsShared() const {
     return animated && sharedPlayback && !independentControl && playing &&
@@ -354,6 +398,7 @@ public:
         networkInput = playback->owned_source();
     } else {
       request = Some(opened.unwrap_unchecked());
+      request->set_prefetch(!active());
       request->observe(item, "imageReady");
     }
     state(Image::Loading);
@@ -365,6 +410,8 @@ public:
     const auto before = generation;
     auto valid = [&] { return guard && guard->d->generation == before; };
     const auto oldSourceSize = item->sourceSize();
+    displayId = frameOwner->displayId;
+    textureRetained = frameOwner->cacheable;
     const auto &value = frameOwner->image;
     const auto *bytes = value.pixels.data();
     auto size = QSize(int(value.width.to_primitive()),
@@ -429,7 +476,9 @@ public:
     }
     if (playback)
       playback->suspend(!active());
-    if (!active()) {
+    if (!active() && !preparing()) {
+      delete download;
+      download = nullptr;
       if (!suspended) {
         if (!paused)
           remaining = qMax<qreal>(0, deadline - position());
@@ -439,6 +488,10 @@ public:
         request->suspend(true);
       return;
     }
+    if (request)
+      request->set_prefetch(!active());
+    if (download)
+      download->set_prefetch(!active());
     if (suspended) {
       suspended = false;
       deadline = position() + remaining;
@@ -460,6 +513,7 @@ public:
           }
         }
         download = new image::NetworkLoad(engine, networkUrl, item);
+        download->set_prefetch(!active());
         if (cache)
           download->cache_target(decodeSize(), animated, contextId, seekFrame);
       }
@@ -557,7 +611,7 @@ public:
         ended = true;
       }
     }
-    bool running = animated && playing && !paused;
+    bool running = active() && animated && playing && !paused;
     if (ended) {
       if (!running)
         return;
@@ -644,6 +698,7 @@ Image::Image(QQuickItem *parent)
     }
     auto *clock = window->findChild<QObject *>(
         QStringLiteral("_qextra_image_clock"), Qt::FindDirectChildrenOnly);
+    d->textures = texture_state(window);
     d->clock =
         clock ? static_cast<ImageClock *>(clock) : new ImageClock(window);
     d->invalidationConnection = connect(
@@ -669,6 +724,8 @@ Image::~Image() {
   disconnect(this, nullptr, this, nullptr);
   disconnect(d->invalidationConnection);
   disconnect(d->visibilityConnection);
+  for (auto connection : d->scopeConnections)
+    disconnect(connection);
   releaseResources();
   auto owner = Box<ImagePrivate>::from_raw(
       rstd::mut_ptr<ImagePrivate>::from_raw_parts(d));
@@ -710,12 +767,27 @@ QSGTextureProvider *Image::textureProvider() const {
     return nullptr;
   if (!d->provider) {
     d->provider = new ImageProvider;
-    d->provider->value = new ImageTexture(window());
+    d->provider->value = new ImageTexture(d->textures);
   }
   return d->provider;
 }
 QSGNode *Image::updatePaintNode(QSGNode *old, UpdatePaintNodeData *) {
   auto *node = static_cast<QSGImageNode *>(old);
+  if (d->loadingMode == Suspended ||
+      (d->loadingMode == Prefetch && !d->inViewport)) {
+    delete node;
+    if (d->provider && d->provider->value) {
+      delete d->provider->value;
+      d->provider->value = nullptr;
+      emit d->provider->textureChanged();
+      if (!d->pixels.isEmpty() && d->pending.isNull()) {
+        d->invalidated.store(true, rstd::sync::atomic::Ordering::Release);
+        QMetaObject::invokeMethod(
+            this, [this] { d->wake(); }, Qt::QueuedConnection);
+      }
+    }
+    return nullptr;
+  }
   if (d->pixels.isEmpty() || (d->status == Error && !d->retain)) {
     delete node;
     if (d->provider) {
@@ -742,9 +814,10 @@ QSGNode *Image::updatePaintNode(QSGNode *old, UpdatePaintNodeData *) {
     d->provider = new ImageProvider;
   auto *provider = d->provider;
   if (!provider->value)
-    provider->value = new ImageTexture(window());
+    provider->value = new ImageTexture(d->textures);
   if (!d->pending.isNull()) {
-    if (!provider->value->setImage(d->pending, d->mipmap, window()->rhi())) {
+    if (!provider->value->setImage(d->pending, d->mipmap, window()->rhi(),
+                                   d->displayId, d->textureRetained)) {
       QMetaObject::invokeMethod(
           this,
           [this, generation = d->generation] {
@@ -785,9 +858,63 @@ QSGNode *Image::updatePaintNode(QSGNode *old, UpdatePaintNodeData *) {
   node->setSourceRect(sourceRect);
   node->setFiltering(smooth() ? QSGTexture::Linear : QSGTexture::Nearest);
   node->setMipmapFiltering(d->mipmap ? QSGTexture::Linear : QSGTexture::None);
+  image_sampling(node, provider->value, tileX, tileY);
   node->setTextureCoordinatesTransform(
       d->mirror ? QSGImageNode::MirrorHorizontally : QSGImageNode::NoTransform);
   return node;
+}
+Image::LoadingMode Image::loadingMode() const { return d->loadingMode; }
+void Image::setLoadingMode(LoadingMode value) {
+  if (d->loadingMode == value)
+    return;
+  QPointer<Image> guard(this);
+  const auto old = d->loadingMode;
+  d->loadingMode = value;
+  if (value == Suspended) {
+    ++d->generation;
+    delete d->download;
+    d->download = nullptr;
+    d->request = None();
+    d->playback = None();
+    d->candidate = None();
+    d->networkInput = None();
+    d->networkFile = None();
+    d->pending = {};
+    d->pixels = {};
+    d->stopClock();
+    releaseResources();
+    update();
+  } else if (old == Suspended)
+    d->reload();
+  if (!guard)
+    return;
+  d->wake();
+  update();
+  emit loadingModeChanged();
+}
+QQuickItem *Image::preparationScope() const { return d->preparationScope; }
+void Image::setPreparationScope(QQuickItem *scope) {
+  if (d->preparationScope == scope)
+    return;
+  for (auto connection : d->scopeConnections)
+    disconnect(connection);
+  d->scopeConnections.clear();
+  d->preparationScope = scope;
+  if (scope) {
+    auto wake = [this] {
+      d->refreshViewport();
+      d->wake();
+    };
+    d->scopeConnections = {
+        connect(scope, &QQuickItem::xChanged, this, wake),
+        connect(scope, &QQuickItem::yChanged, this, wake),
+        connect(scope, &QQuickItem::widthChanged, this, wake),
+        connect(scope, &QQuickItem::heightChanged, this, wake),
+        connect(scope, &QQuickItem::visibleChanged, this, wake),
+        connect(scope, &QObject::destroyed, this, wake)};
+  }
+  d->wake();
+  emit preparationScopeChanged();
 }
 QUrl Image::source() const { return d->source; }
 void Image::setSource(const QUrl &value) {

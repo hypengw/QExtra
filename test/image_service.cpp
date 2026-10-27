@@ -1,4 +1,6 @@
 #include "tests.hpp"
+#include <QSemaphore>
+#include <QSharedPointer>
 #include <QtCore/QDebug>
 #include <rstd/macro.hpp>
 
@@ -8,6 +10,35 @@ import qextra;
 using namespace rstd::prelude;
 using namespace rstd::literals;
 
+namespace {
+struct DecodeGate {
+  QSemaphore entered, opened;
+};
+struct GatedInput {
+  wavsen::image::Pixels bytes;
+  QSharedPointer<DecodeGate> gate;
+};
+} // namespace
+namespace rstd {
+template <>
+struct Impl<io::ReadAt, GatedInput> : DefaultInImpl<io::ReadAt, GatedInput> {
+  auto read_buf_at(io::BorrowedCursor target, u64 offset) const
+      -> io::Result<empty> {
+    const auto &input = this->self();
+    input.gate->entered.release();
+    input.gate->opened.acquire();
+    input.gate->opened.release();
+    if (offset >= u64(input.bytes.size().to_primitive()))
+      return Ok(empty{});
+    const auto at = usize(offset.to_primitive());
+    const auto count = target.capacity().min(input.bytes.size() - at);
+    target.append(slice<u8>::from_raw_parts(
+        reinterpret_cast<const byte *>(input.bytes.data() + at.to_primitive()),
+        count));
+    return Ok(empty{});
+  }
+};
+} // namespace rstd
 namespace {
 template <typename F> bool until(F predicate) {
   QElapsedTimer timer;
@@ -108,6 +139,42 @@ int run_image_service(int argc, char **argv) {
     rstd_assert(qextra::image::service_statistics().decoded == before);
     request.cancel();
     rstd_assert(qextra::image::service_statistics().waiting == usize());
+  }
+  {
+    qextra::image::set_worker_limit(usize(2));
+    auto gate = QSharedPointer<DecodeGate>::create();
+    const auto encoded =
+        QByteArray("P6\n1 1\n255\n") + QByteArray::fromHex("ff0000");
+    auto memory = qextra::image::allocate_input(usize(encoded.size())).unwrap();
+    for (qsizetype i = 0; i < encoded.size(); ++i)
+      memory.data_mut()[i] = static_cast<unsigned char>(encoded[i]);
+    auto reader =
+        rstd::io::SharedReadAt::try_make(GatedInput{rstd::move(memory), gate})
+            .unwrap();
+    auto range = rstd::io::ReadRange::make(rstd::move(reader), u64(),
+                                           u64(encoded.size()))
+                     .unwrap();
+    auto source = wavsen::image::Source::reader(rstd::move(range));
+    auto first =
+        qextra::image::Request::open_source(QStringLiteral("prefetch-one"),
+                                            source.clone(), {}, false, false)
+            .unwrap();
+    first.set_prefetch(true);
+    rstd_assert(first.advance());
+    rstd_assert(until([&] { return gate->entered.tryAcquire(); }));
+    auto second =
+        qextra::image::Request::open_source(QStringLiteral("prefetch-two"),
+                                            source.clone(), {}, false, false)
+            .unwrap();
+    second.set_prefetch(true);
+    rstd_assert(second.advance());
+    auto visible = qextra::image::Request::open(name, {}).unwrap();
+    rstd_assert(visible.advance());
+    rstd_assert(until([&] { return visible.poll().frame.is_some(); }));
+    rstd_assert(qextra::image::service_statistics().waiting == usize(1));
+    gate->opened.release();
+    rstd_assert(until([&] { return first.poll().frame.is_some(); }));
+    rstd_assert(until([&] { return second.poll().frame.is_some(); }));
   }
   for (int argument = 1; argument < argc; ++argument) {
     qextra::image::clear_cache();

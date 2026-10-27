@@ -18,6 +18,7 @@ struct Counts {
   Atomic<usize> decoded;
   Atomic<usize> opened;
   Atomic<usize> hits;
+  Atomic<u64> nextDisplay{u64(1)};
 };
 
 struct Notification {
@@ -58,8 +59,11 @@ struct Notification {
 export struct Frame {
   wi::DecodedImage image;
   Arc<Counts> counts;
-  Frame(wi::DecodedImage value, Arc<Counts> owner)
-      : image(rstd::move(value)), counts(rstd::move(owner)) {}
+  quint64 displayId;
+  bool cacheable;
+  Frame(wi::DecodedImage value, Arc<Counts> owner, quint64 id, bool retained)
+      : image(rstd::move(value)), counts(rstd::move(owner)), displayId(id),
+        cacheable(retained) {}
   ~Frame() { counts->payloads.fetch_sub(usize(1), Ordering::Release); }
 };
 
@@ -102,6 +106,7 @@ struct State {
   bool cache;
   Atomic<usize> subscribers{usize(1)};
   Atomic<usize> activeSubscribers{usize(1)};
+  Atomic<usize> visibleSubscribers{usize(1)};
   wi::DecodeRequest size;
   wi::Cancellation cancellation;
   Mutex<Fields> fields;
@@ -117,6 +122,11 @@ export struct Poll {
   Option<wi::Error> error;
   wi::ImageInfo info;
   bool eof{};
+};
+
+struct DisplayResult {
+  wi::DecodedImage image;
+  quint64 identity;
 };
 
 struct Service {
@@ -137,7 +147,7 @@ struct Service {
   };
   struct CacheEntry {
     Key key;
-    Vec<wi::DecodedImage> frames{Vec<wi::DecodedImage>::make()};
+    Vec<DisplayResult> frames{Vec<DisplayResult>::make()};
     wi::ImageInfo info;
     usize stamp;
     usize bytes;
@@ -178,6 +188,8 @@ struct Service {
     while (!q.closing && q.running < q.limit) {
       Option<usize> selected;
       auto rank = [&](const Job &job) {
+        if (job.state->visibleSubscribers.load(Ordering::Acquire) == usize())
+          return 3;
         if (job.queued.elapsed().as_millis() >= u64(250))
           return 0;
         return job.priority == (q.continuation ? 1 : 0) ? 1 : 2;
@@ -185,6 +197,9 @@ struct Service {
       for (usize i; i < q.jobs.len(); ++i) {
         const auto &job = q.jobs[i];
         if (job.state->activeSubscribers.load(Ordering::Acquire) == usize())
+          continue;
+        if (rank(job) == 3 && q.limit > usize(1) &&
+            q.running >= q.limit - usize(1))
           continue;
         if (!selected || rank(job) < rank(q.jobs[*selected]) ||
             (rank(job) != 0 && rank(job) == rank(q.jobs[*selected]) &&
@@ -248,7 +263,7 @@ struct Service {
             ownedSource};
   }
   auto cached(Key key, int index, wi::ImageInfo &info, bool &eof)
-      -> Option<wi::DecodedImage> {
+      -> Option<DisplayResult> {
     key.frame = 0;
     auto locked = cache.lock().unwrap_unchecked();
     for (auto &entry : locked->entries)
@@ -257,12 +272,14 @@ struct Service {
         info = entry.info;
         eof = usize(index) >= entry.frames.len();
         counts->hits.fetch_add(usize(1), Ordering::Relaxed);
-        return eof ? Option<wi::DecodedImage>{}
-                   : Some(copy(entry.frames[usize(index)]));
+        return eof ? Option<DisplayResult>{}
+                   : Some(DisplayResult{copy(entry.frames[usize(index)].image),
+                                        entry.frames[usize(index)].identity});
       }
     return None();
   }
-  void remember(Key key, wi::DecodedImage *image, wi::ImageInfo info) {
+  void remember(Key key, wi::DecodedImage *image, wi::ImageInfo info,
+                quint64 &identity) {
     key.frame = 0;
     auto locked = cache.lock().unwrap_unchecked();
     if (locked->limit == usize())
@@ -292,7 +309,8 @@ struct Service {
     }
     auto frameIndex = usize(image->index.to_primitive());
     if (frameIndex < entry.frames.len()) {
-      *image = copy(entry.frames[frameIndex]);
+      *image = copy(entry.frames[frameIndex].image);
+      identity = entry.frames[frameIndex].identity;
       return;
     }
     if (frameIndex != entry.frames.len())
@@ -324,7 +342,7 @@ struct Service {
       block(locked->entries[*oldest]);
       locked->entries[*oldest].blocked = false;
     }
-    entry.frames.push(copy(*image));
+    entry.frames.push(DisplayResult{copy(*image), identity});
     entry.bytes += bytes;
     locked->bytes += bytes;
     entry.info = info;
@@ -413,8 +431,9 @@ struct Service {
     if (state->cache && !state->cancellation.cancelled()) {
       auto hit = cached(state->key, index, info, eof);
       if (hit.is_some()) {
-        auto owner =
-            Arc<Frame>::try_make(hit.unwrap_unchecked(), counts.clone());
+        auto owner = Arc<Frame>::try_make(
+            rstd::move(hit->image), counts.clone(),
+            info.animated ? 0 : hit->identity, !info.animated);
         if (owner.is_err())
           error = Some(wi::Error::ResourceLimit);
         else
@@ -462,15 +481,22 @@ struct Service {
             if (target > 0)
               error = Some(wi::Error::InvalidInput);
             eof = true;
-            if (state->cache)
-              remember(state->key, nullptr, session->info());
+            if (state->cache) {
+              quint64 unused{};
+              remember(state->key, nullptr, session->info(), unused);
+            }
             break;
           }
+          quint64 identity =
+              counts->nextDisplay.fetch_add(u64(1), Ordering::Relaxed)
+                  .to_primitive();
           if (state->cache)
-            remember(state->key, &*value, session->info());
+            remember(state->key, &*value, session->info(), identity);
           if (sessionNext == index) {
             auto owner =
-                Arc<Frame>::try_make(value.unwrap_unchecked(), counts.clone());
+                Arc<Frame>::try_make(value.unwrap_unchecked(), counts.clone(),
+                                     session->info().animated ? 0 : identity,
+                                     state->cache && !session->info().animated);
             if (owner.is_err())
               error = Some(wi::Error::ResourceLimit);
             else
@@ -511,19 +537,21 @@ export class Request {
   Arc<State> state_;
   Option<Arc<Notification>> notification_;
   bool suspended_{};
+  bool prefetch_{};
   explicit Request(Arc<State> state) : state_(rstd::move(state)) {}
 
 public:
   Request(Request &&other) noexcept
       : state_(rstd::move(other.state_)),
-        notification_(other.notification_.take()),
-        suspended_(other.suspended_) {}
+        notification_(other.notification_.take()), suspended_(other.suspended_),
+        prefetch_(other.prefetch_) {}
   auto operator=(Request &&other) noexcept -> Request & {
     if (this != &other) {
       cancel();
       state_ = rstd::move(other.state_);
       notification_ = other.notification_.take();
       suspended_ = other.suspended_;
+      prefetch_ = other.prefetch_;
     }
     return *this;
   }
@@ -534,8 +562,11 @@ public:
       notification_ = None();
     }
     if (state_) {
-      if (!suspended_)
+      if (!suspended_) {
         state_->activeSubscribers.fetch_sub(usize(1), Ordering::AcqRel);
+        if (!prefetch_)
+          state_->visibleSubscribers.fetch_sub(usize(1), Ordering::AcqRel);
+      }
       if (state_->subscribers.fetch_sub(usize(1), Ordering::AcqRel) == usize(1))
         state_->cancellation.cancel();
       state_.reset();
@@ -584,7 +615,8 @@ public:
     if (state.is_err())
       return None();
     s.counts->payloads.fetch_add(usize(1), Ordering::Relaxed);
-    auto frame = Arc<Frame>::try_make(image.take().unwrap(), s.counts.clone());
+    auto frame = Arc<Frame>::try_make(rstd::move(image->image),
+                                      s.counts.clone(), image->identity, true);
     if (frame.is_err()) {
       s.counts->payloads.fetch_sub(usize(1), Ordering::Relaxed);
       return None();
@@ -621,6 +653,7 @@ private:
                                                        Ordering::AcqRel,
                                                        Ordering::Relaxed)) {
             state->activeSubscribers.fetch_add(usize(1), Ordering::AcqRel);
+            state->visibleSubscribers.fetch_add(usize(1), Ordering::AcqRel);
             return Ok(Request(rstd::move(state)));
           }
         }
@@ -674,14 +707,32 @@ public:
     notification_ = Some(rstd::move(notice));
   }
 
+  void set_prefetch(bool value) {
+    if (!state_ || prefetch_ == value)
+      return;
+    prefetch_ = value;
+    if (!suspended_) {
+      if (value)
+        state_->visibleSubscribers.fetch_sub(usize(1), Ordering::AcqRel);
+      else
+        state_->visibleSubscribers.fetch_add(usize(1), Ordering::AcqRel);
+    }
+    auto &s = service();
+    auto queue = s.queue.lock().unwrap_unchecked();
+    s.dispatch(*queue);
+  }
   void suspend(bool value) {
     if (suspended_ == value)
       return;
     suspended_ = value;
     if (value) {
       state_->activeSubscribers.fetch_sub(usize(1), Ordering::AcqRel);
+      if (!prefetch_)
+        state_->visibleSubscribers.fetch_sub(usize(1), Ordering::AcqRel);
     } else {
       state_->activeSubscribers.fetch_add(usize(1), Ordering::AcqRel);
+      if (!prefetch_)
+        state_->visibleSubscribers.fetch_add(usize(1), Ordering::AcqRel);
     }
     auto &s = service();
     auto queue = s.queue.lock().unwrap_unchecked();
