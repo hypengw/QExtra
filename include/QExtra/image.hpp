@@ -150,6 +150,7 @@ protected:
   ImagePrivate *d;
 private slots:
   void imageReady();
+  void imageTextureFailed(quint64 generation);
 };
 
 class AnimatedImage : public Image {

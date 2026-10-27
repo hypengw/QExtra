@@ -54,6 +54,40 @@ Window {
   rstd_assert(window && a && b);
   const auto source = QUrl::fromLocalFile(file.fileName());
   rstd_assert(qextra::image::set_texture_cache_limit(window, 1024 * 1024));
+  using rstd::sync::atomic::Atomic;
+  using rstd::sync::atomic::Ordering;
+  Atomic<usize> synchronized{usize()}, committed{usize()};
+  const auto syncConnection = QObject::connect(
+      window, &QQuickWindow::afterSynchronizing, window,
+      [&] {
+        if (synchronized.load(Ordering::Acquire) != usize())
+          return;
+        for (auto *item : {a, b}) {
+          auto *provider = item->textureProvider();
+          auto *texture = provider ? provider->texture() : nullptr;
+          if (!texture || texture->textureSize() != QSize(2, 1))
+            continue;
+          rstd_assert(!texture->rhiTexture());
+          synchronized.store(usize(1), Ordering::Release);
+          break;
+        }
+      },
+      Qt::DirectConnection);
+  const auto renderConnection = QObject::connect(
+      window, &QQuickWindow::afterRendering, window,
+      [&] {
+        if (synchronized.load(Ordering::Acquire) == usize() ||
+            committed.load(Ordering::Acquire) != usize())
+          return;
+        for (auto *item : {a, b}) {
+          auto *provider = item->textureProvider();
+          auto *texture = provider ? provider->texture() : nullptr;
+          if (texture && texture->textureSize() == QSize(2, 1))
+            rstd_assert(texture->rhiTexture());
+        }
+        committed.store(usize(1), Ordering::Release);
+      },
+      Qt::DirectConnection);
   a->setSource(source);
   b->setSource(source);
   auto stats = [&] { return qextra::image::texture_statistics(window); };
@@ -73,6 +107,10 @@ Window {
     return a->status() == qextra::Image::Ready &&
            b->status() == qextra::Image::Ready && colors(window, true);
   }));
+  rstd_assert(synchronized.load(Ordering::Acquire) == usize(1) &&
+              committed.load(Ordering::Acquire) == usize(1));
+  QObject::disconnect(syncConnection);
+  QObject::disconnect(renderConnection);
   rstd_assert(stats().allocations == 1 && stats().uploads == 1 &&
               stats().hits >= 1 && stats().active_bytes == 8);
   a->setSource({});

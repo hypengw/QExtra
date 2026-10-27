@@ -750,6 +750,13 @@ void Image::itemChange(ItemChange change, const ItemChangeData &value) {
   }
 }
 void Image::imageReady() { d->tick(); }
+void Image::imageTextureFailed(quint64 generation) {
+  if (generation != d->generation)
+    return;
+  d->pixels = {};
+  releaseResources();
+  d->fail(QStringLiteral("Image texture allocation failed"));
+}
 void Image::releaseResources() {
   if (d->provider && d->renderWindow)
     d->renderWindow->scheduleRenderJob(new TextureCleanup(d->provider),
@@ -767,7 +774,8 @@ QSGTextureProvider *Image::textureProvider() const {
     return nullptr;
   if (!d->provider) {
     d->provider = new ImageProvider;
-    d->provider->value = new ImageTexture(d->textures);
+    d->provider->value =
+        new ImageTexture(d->textures, const_cast<Image *>(this));
   }
   return d->provider;
 }
@@ -814,10 +822,11 @@ QSGNode *Image::updatePaintNode(QSGNode *old, UpdatePaintNodeData *) {
     d->provider = new ImageProvider;
   auto *provider = d->provider;
   if (!provider->value)
-    provider->value = new ImageTexture(d->textures);
+    provider->value = new ImageTexture(d->textures, this);
   if (!d->pending.isNull()) {
     if (!provider->value->setImage(d->pending, d->mipmap, window()->rhi(),
-                                   d->displayId, d->textureRetained)) {
+                                   d->displayId, d->textureRetained,
+                                   d->generation)) {
       QMetaObject::invokeMethod(
           this,
           [this, generation = d->generation] {
