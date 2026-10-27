@@ -3,6 +3,7 @@
 #include <rstd/macro.hpp>
 import rstd;
 import qextra;
+import ncrequest;
 
 using namespace rstd::prelude;
 
@@ -25,11 +26,7 @@ public:
   QNetworkReply *createRequest(Operation op, const QNetworkRequest &original,
                                QIODevice *data) override {
     ++requests;
-    auto request = original;
-    if (request.url().path() == QLatin1String("/cached"))
-      request.setAttribute(QNetworkRequest::CacheLoadControlAttribute,
-                           QNetworkRequest::PreferCache);
-    return QNetworkAccessManager::createRequest(op, request, data);
+    return QNetworkAccessManager::createRequest(op, original, data);
   }
 };
 class Factory : public QQmlNetworkAccessManagerFactory {
@@ -38,9 +35,8 @@ public:
   QPointer<Manager> manager;
   QNetworkAccessManager *create(QObject *parent) override {
     manager = new Manager(parent);
-    auto *disk = new QNetworkDiskCache(manager);
-    disk->setCacheDirectory(cache.path());
-    manager->setCache(disk);
+    auto *resources = new ncrequest::client::qt_network::ResourceCache(manager);
+    resources->install_disk_cache(cache.path(), 50 * 1024 * 1024);
     return manager;
   }
 };
@@ -150,6 +146,18 @@ void test_queue() {
   const auto started = second.manager->started.size();
   QCoreApplication::processEvents();
   rstd_assert(second.manager->started.size() == started);
+  ControlledFactory coalesced;
+  QQmlEngine shared;
+  shared.setNetworkAccessManagerFactory(&coalesced);
+  auto *firstLoad = new qextra::image::NetworkLoad(&shared, url(30), nullptr);
+  auto *secondLoad = new qextra::image::NetworkLoad(&shared, url(30), nullptr);
+  rstd_assert(wait_for(
+      [&] { return coalesced.manager && coalesced.manager->active == 1; }));
+  rstd_assert(coalesced.manager->started.size() == 1);
+  delete firstLoad;
+  rstd_assert(coalesced.manager->active == 1);
+  delete secondLoad;
+  rstd_assert(coalesced.manager->active == 0);
   qInfo()
       << "network queue engine isolation, limit, order and cancellation passed";
 }
@@ -203,6 +211,14 @@ int run_image_network(int argc, char **argv) {
         socket->setProperty("handled", true);
         const auto path = request.split(' ').value(1);
         ++hits[path];
+        if (path == "/validated" &&
+            request.contains("If-None-Match: \"image-1\"")) {
+          socket->write("HTTP/1.1 304 Not Modified\r\nETag: "
+                        "\"image-1\"\r\nCache-Control: public, "
+                        "max-age=3600\r\nConnection: close\r\n\r\n");
+          socket->disconnectFromHost();
+          return;
+        }
         if (path == "/slow")
           return;
         QByteArray body("P6\n1 1\n255\n");
@@ -296,8 +312,12 @@ int run_image_network(int argc, char **argv) {
                           chunk + "\r\n");
           socket->write("0\r\n\r\n");
         } else {
-          extra += path == "/cached" ? "Cache-Control: public, max-age=3600\r\n"
-                                     : "Cache-Control: no-store\r\n";
+          if (path == "/validated")
+            extra += "ETag: \"image-1\"\r\nCache-Control: no-cache\r\n";
+          else if (path != "/fallback")
+            extra += path == "/cached"
+                         ? "Cache-Control: public, max-age=3600\r\n"
+                         : "Cache-Control: no-store\r\n";
           socket->write("HTTP/1.1 " + status + "\r\n" + extra +
                         "Content-Length: " + QByteArray::number(body.size()) +
                         "\r\nConnection: close\r\n\r\n" + body);
@@ -309,6 +329,7 @@ int run_image_network(int argc, char **argv) {
   Factory factory;
   auto *engine = new QQmlEngine;
   engine->setNetworkAccessManagerFactory(&factory);
+  rstd_assert(qextra::image::set_network_cache(engine, {url("")}, 300));
   QQmlComponent component(engine);
   component.setData(R"(
 import QtQuick
@@ -403,8 +424,39 @@ Window {
   rstd_assert(partialProgress);
   load("/cached");
   const auto cached = hits["/cached"];
+  const auto cachedRequests = factory.manager->requests;
+  const auto decoded = qextra::image::service_statistics().decoded;
   load("/cached");
   rstd_assert(hits["/cached"] == cached);
+  rstd_assert(factory.manager->requests == cachedRequests);
+  rstd_assert(qextra::image::service_statistics().decoded == decoded);
+  const auto pixelRequests = factory.manager->requests;
+  qextra::image::clear_cache();
+  load("/cached");
+  rstd_assert(factory.manager->requests == pixelRequests + 1);
+  rstd_assert(hits["/cached"] == cached);
+  load("/fallback");
+  const auto fallbackRequests = factory.manager->requests;
+  load("/fallback");
+  rstd_assert(factory.manager->requests == fallbackRequests);
+  rstd_assert(hits["/fallback"] == 1);
+  load("/validated");
+  const auto validatedBytes = qextra::image::network_statistics(engine).bytes;
+  const auto validatedDecoded = qextra::image::service_statistics().decoded;
+  load("/validated");
+  rstd_assert(hits["/validated"] == 2);
+  rstd_assert(qextra::image::network_statistics(engine).bytes ==
+              validatedBytes);
+  rstd_assert(qextra::image::service_statistics().decoded == validatedDecoded);
+  const auto validatedRequests = factory.manager->requests;
+  load("/validated");
+  rstd_assert(factory.manager->requests == validatedRequests);
+  const auto resetRequests = factory.manager->requests;
+  qextra::image::clear_network_cache(engine);
+  rstd_assert(wait_for([&] {
+    return factory.manager->requests > resetRequests &&
+           image->status() == qextra::Image::Ready;
+  }));
   load("/changing");
   rstd_assert(color(false));
   blue = true;
@@ -441,6 +493,7 @@ Window {
   transformed->setSource(QUrl());
   for (const auto &animation : animations) {
     gif = animation;
+    image->setPlaying(true);
     load("/gif");
     rstd_assert(wait_for([&] { return image->currentFrame() > 0; }));
     const auto downloads = hits["/gif"];

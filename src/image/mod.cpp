@@ -96,6 +96,7 @@ public:
   image::NetworkLoad *download{};
   Option<wi::Source> networkInput;
   QString networkIdentity;
+  bool networkCacheable{};
   Option<image::FileTarget> networkFile;
   qreal progress{};
   QSize requested;
@@ -123,6 +124,7 @@ public:
   QMetaObject::Connection invalidationConnection;
   QMetaObject::Connection visibilityConnection;
   bool inViewport{}, wakePending{};
+  QPointer<QQmlEngine> observedEngine;
   rstd::sync::atomic::Atomic<bool> invalidated;
 
   explicit ImagePrivate(Image *owner) : item(owner) {}
@@ -265,6 +267,21 @@ public:
              url.scheme() == QLatin1String("https")) {
       networkUrl = url;
       path = url.path();
+      auto *engine = qmlEngine(item);
+      if (engine && observedEngine != engine) {
+        observedEngine = engine;
+        image::observe_network_cache(engine, item, [this](const QUrl &changed) {
+          if (source.scheme() != QLatin1String("http") &&
+              source.scheme() != QLatin1String("https"))
+            return;
+          if (!changed.isEmpty() && changed != source)
+            return;
+          networkInput = None();
+          networkFile = None();
+          networkIdentity.clear();
+          reload(true);
+        });
+      }
     } else {
       fail(QStringLiteral("Unsupported image URL scheme"));
       return;
@@ -305,7 +322,7 @@ public:
         networkUrl = QUrl();
         start(image::Request::open_source(
             networkIdentity, networkInput->clone(), decodeSize(), animated,
-            cache, contextId, seekFrame));
+            cache && networkCacheable, contextId, seekFrame));
         return;
       }
       wake();
@@ -433,7 +450,28 @@ public:
           fail(QStringLiteral("Network images require a QML engine"));
           return;
         }
+        if (cache) {
+          auto cached = image::NetworkLoad::cached(
+              engine, networkUrl, decodeSize(), animated, contextId, seekFrame);
+          if (cached) {
+            networkUrl = QUrl();
+            start(Ok(cached.take().unwrap()));
+            return;
+          }
+        }
         download = new image::NetworkLoad(engine, networkUrl, item);
+        if (cache)
+          download->cache_target(decodeSize(), animated, contextId, seekFrame);
+      }
+      if (cache) {
+        auto cached = download->take_cached();
+        if (cached) {
+          delete download;
+          download = nullptr;
+          networkUrl = QUrl();
+          start(Ok(cached.take().unwrap()));
+          return;
+        }
       }
       setProgress(download->progress());
       if (!download->done())
@@ -454,6 +492,7 @@ public:
                                         seekFrame));
       } else {
         auto identity = download->identity();
+        const bool reusable = download->reusable();
         auto input = download->take_source();
         delete download;
         download = nullptr;
@@ -463,10 +502,11 @@ public:
           return;
         }
         networkIdentity = rstd::move(identity);
+        networkCacheable = reusable;
         networkInput = Some(input.unwrap_unchecked());
         start(image::Request::open_source(
             networkIdentity, networkInput->clone(), decodeSize(), animated,
-            cache, contextId, seekFrame));
+            cache && reusable, contextId, seekFrame));
       }
     }
     if (playback) {

@@ -66,6 +66,7 @@ export struct Frame {
 struct Fields {
   Option<wi::ImageSession> session;
   Option<Arc<Frame>> ready;
+  Option<Arc<Frame>> cachedFrame;
   Option<wi::Error> error;
   wi::ImageInfo info;
   bool busy{};
@@ -564,6 +565,40 @@ public:
                   animation, cache, context, initialFrame);
   }
 
+  static auto cached_source(QString identity, wi::DecodeRequest size,
+                            bool animation = false, quint64 context = 0,
+                            int initialFrame = 0) -> Option<Request> {
+    auto &s = service();
+    auto key = Service::key(identity, size, context, initialFrame, true);
+    wi::ImageInfo info;
+    bool eof{};
+    auto image = s.cached(key, initialFrame, info, eof);
+    if (!image || info.animated)
+      return None();
+    auto cancellation = wi::Cancellation::make();
+    if (cancellation.is_err())
+      return None();
+    auto state =
+        Arc<State>::try_make(identity, None<wi::Source>(), key, animation, true,
+                             size, cancellation.unwrap_unchecked(), QString());
+    if (state.is_err())
+      return None();
+    s.counts->payloads.fetch_add(usize(1), Ordering::Relaxed);
+    auto frame = Arc<Frame>::try_make(image.take().unwrap(), s.counts.clone());
+    if (frame.is_err()) {
+      s.counts->payloads.fetch_sub(usize(1), Ordering::Relaxed);
+      return None();
+    }
+    {
+      auto fields = (*state)->fields.lock().unwrap_unchecked();
+      fields->info = info;
+      fields->ready = Some(frame.unwrap_unchecked());
+      fields->cachedFrame = Some((*fields->ready).clone());
+      fields->next = initialFrame + 1;
+    }
+    return Some(Request(state.unwrap_unchecked()));
+  }
+
 private:
   static auto create(QString path, Option<wi::Source> input,
                      wi::DecodeRequest size, bool animation, bool cache,
@@ -658,9 +693,21 @@ public:
     bool first;
     {
       auto fields = state_->fields.lock().unwrap_unchecked();
+      if (!fields->started && fields->ready) {
+        fields->started = true;
+        return true;
+      }
       if (!state_->animation &&
           (fields->busy || fields->ready.is_some() || fields->error.is_some()))
         return true;
+      if (fields->cachedFrame && !fields->ready &&
+          !state_->cancellation.cancelled()) {
+        fields->eof = !rewind || target != 0;
+        if (!fields->eof)
+          fields->ready = Some((*fields->cachedFrame).clone());
+        Service::notify(*fields);
+        return true;
+      }
       if (state_->cancellation.cancelled() || fields->busy ||
           fields->ready.is_some() || fields->error.is_some() || target < 0)
         return false;

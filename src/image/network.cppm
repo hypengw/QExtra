@@ -1,14 +1,21 @@
+module;
+#include <functional>
 export module qextra:image.network;
 import qextra.qt;
 import :image.service;
 import rstd;
+import ncrequest;
 
 using namespace rstd::prelude;
 using namespace Qt::StringLiterals;
 namespace wi = wavsen::image;
+namespace ncq = ncrequest::client::qt_network;
 
 namespace qextra::image {
 constexpr auto chunk_bytes = 64 * 1024;
+export struct NetworkStatistics {
+  quint64 requests{}, bytes{};
+};
 struct EncodedInput {
   Vec<wi::Pixels> chunks{Vec<wi::Pixels>::make()};
   usize length;
@@ -19,10 +26,11 @@ namespace rstd {
 template <>
 struct Impl<io::ReadAt, qextra::image::EncodedInput>
     : DefaultInImpl<io::ReadAt, qextra::image::EncodedInput> {
-  auto read_buf_at(io::BorrowedCursor target, u64 offset) const -> io::Result<empty> {
+  auto read_buf_at(io::BorrowedCursor target, u64 offset) const
+      -> io::Result<empty> {
     const auto &input = this->self();
     if (offset >= u64(input.length.to_primitive()))
-      return Ok(empty {});
+      return Ok(empty{});
     auto position = usize(offset.to_primitive());
     auto length = target.capacity().min(input.length - position);
     usize copied;
@@ -31,11 +39,14 @@ struct Impl<io::ReadAt, qextra::image::EncodedInput>
       auto within = position % usize(qextra::image::chunk_bytes);
       auto count =
           (length - copied).min(usize(qextra::image::chunk_bytes) - within);
-      target.append(slice<u8>::from_raw_parts(reinterpret_cast<const byte*>(input.chunks[index].data() + within.to_primitive()), count));
+      target.append(slice<u8>::from_raw_parts(
+          reinterpret_cast<const byte *>(input.chunks[index].data() +
+                                         within.to_primitive()),
+          count));
       copied += count;
       position += count;
     }
-    return Ok(empty {});
+    return Ok(empty{});
   }
 };
 } // namespace rstd
@@ -52,16 +63,19 @@ bool same_origin(const QUrl &a, const QUrl &b) {
              b.port(b.scheme() == QLatin1String("https") ? 443 : 80);
 }
 
-export class NetworkLoad;
+class NetworkTransfer;
 
 class NetworkQueue : public QObject {
   QQmlEngine *engine_;
-  Vec<NetworkLoad *> waiting_{Vec<NetworkLoad *>::make()};
-  Vec<NetworkLoad *> active_{Vec<NetworkLoad *>::make()};
+  Vec<NetworkTransfer *> waiting_{Vec<NetworkTransfer *>::make()};
+  Vec<NetworkTransfer *> active_{Vec<NetworkTransfer *>::make()};
   bool scheduled_{};
   bool closing_{};
   QUrl fileOrigin_;
   QString fileRoot_;
+  ncq::ResourceCache *resources_{};
+  NetworkStatistics statistics_;
+  QHash<QUrl, QWeakPointer<NetworkTransfer>> transfers_;
 
   void schedule();
   void shutdown();
@@ -70,25 +84,56 @@ public:
   explicit NetworkQueue(QQmlEngine *engine);
   ~NetworkQueue() override;
   static NetworkQueue *get(QQmlEngine *engine);
-  void enqueue(NetworkLoad *load);
-  void release(NetworkLoad *load);
+  void enqueue(NetworkTransfer *load);
+  void release(NetworkTransfer *load);
   bool configure_files(QUrl origin, QString directory);
+  bool configure_cache(QList<QUrl> origins, qint64 fallback);
+  void observe(QObject *receiver, std::function<void(const QUrl &)> callback) {
+    resources_->observe(receiver, rstd::move(callback));
+  }
+  void clear_cache() {
+    transfers_.clear();
+    resources_->clear();
+  }
+  auto transfer(const QUrl &) -> QSharedPointer<NetworkTransfer>;
+  void read_bytes(qint64 bytes) { statistics_.bytes += bytes; }
+  auto statistics() const -> NetworkStatistics { return statistics_; }
   QUrl file_origin() const { return fileOrigin_; }
   QString file_root() const { return fileRoot_; }
+  auto acquire(const QUrl &url) -> ncq::ResourceRequest {
+    QNetworkRequest request(url);
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                         QNetworkRequest::NoLessSafeRedirectPolicy);
+    request.setMaximumRedirectsAllowed(10);
+    if (!fileRoot_.isEmpty() && same_origin(url, fileOrigin_))
+      request.setRawHeader("QExtra-Image-Transport", "file-v1");
+    return resources_->acquire(request);
+  }
+  void starting() { ++statistics_.requests; }
 };
 
-export class NetworkLoad : public QObject {
+class NetworkTransfer : public QObject {
   friend class NetworkQueue;
   QPointer<NetworkQueue> queue_;
   QPointer<QNetworkReply> reply_;
-  QPointer<QObject> receiver_;
+  QList<QPointer<QObject>> receivers_;
+  Option<wi::Source> source_;
   EncodedInput input_;
-  QCryptographicHash hash_{QCryptographicHash::Sha256};
+  ncq::ResourceRequest resource_;
+  struct DecodeTarget {
+    wi::DecodeRequest size;
+    bool animation;
+    quint64 context;
+    int frame;
+  };
+  Option<DecodeTarget> target_;
+  Option<Request> prepared_;
   QUrl url_;
   QUrl fileOrigin_;
   QString fileRoot_;
   Option<FileTarget> fileTarget_;
   bool fileAllowed_{};
+  bool shared_{};
   QString error_;
   bool done_{};
   bool notified_{};
@@ -104,9 +149,10 @@ export class NetworkLoad : public QObject {
         this,
         [this] {
           notified_ = false;
-          if (receiver_)
-            QMetaObject::invokeMethod(receiver_, "imageReady",
-                                      Qt::QueuedConnection);
+          for (auto receiver : receivers_)
+            if (receiver)
+              QMetaObject::invokeMethod(receiver, "imageReady",
+                                        Qt::QueuedConnection);
         },
         Qt::QueuedConnection);
   }
@@ -174,6 +220,22 @@ export class NetworkLoad : public QObject {
       return;
     }
     total_ = declared;
+    if (target_ && !shared_) {
+      auto cached = this->cached(target_->size, target_->animation,
+                                 target_->context, target_->frame);
+      if (cached) {
+        prepared_ = cached.take();
+        done_ = true;
+        timeout_.stop();
+        QObject::disconnect(reply_, nullptr, this, nullptr);
+        reply_->abort();
+        reply_->deleteLater();
+        reply_ = nullptr;
+        if (queue_)
+          queue_->release(this);
+        notify();
+      }
+    }
   }
   void read() {
     headers();
@@ -212,8 +274,9 @@ export class NetworkLoad : public QObject {
       }
       if (count == 0)
         break;
-      hash_.addData(QByteArrayView(data, count));
       input_.length += usize(count);
+      if (queue_)
+        queue_->read_bytes(count);
       remaining -= count;
     }
     if (remaining == 0 && reply_->bytesAvailable() > 0) {
@@ -239,14 +302,13 @@ export class NetworkLoad : public QObject {
   }
 
   void start(QQmlEngine *engine) {
-    QNetworkRequest request(url_);
-    request.setAttribute(QNetworkRequest::HttpPipeliningAllowedAttribute, true);
-    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
-                         QNetworkRequest::NoLessSafeRedirectPolicy);
-    request.setMaximumRedirectsAllowed(10);
-    if (fileAllowed_)
-      request.setRawHeader("QExtra-Image-Transport", "file-v1");
-    reply_ = engine->networkAccessManager()->get(request);
+    queue_->starting();
+    resource_ = queue_->acquire(url_);
+    reply_ = resource_.open();
+    if (!reply_) {
+      stop(u"Image network resource is no longer available"_s);
+      return;
+    }
     QObject::connect(
         reply_, &QNetworkReply::redirected, this, [this](const QUrl &target) {
           fileAllowed_ = fileAllowed_ && same_origin(target, fileOrigin_);
@@ -271,9 +333,8 @@ export class NetworkLoad : public QObject {
   }
 
 public:
-  NetworkLoad(QQmlEngine *engine, QUrl url, QObject *receiver)
-      : QObject(receiver), queue_(NetworkQueue::get(engine)),
-        receiver_(receiver), url_(rstd::move(url)) {
+  NetworkTransfer(QQmlEngine *engine, QUrl url)
+      : queue_(NetworkQueue::get(engine)), url_(rstd::move(url)) {
     fileOrigin_ = queue_->file_origin();
     fileRoot_ = queue_->file_root();
     fileAllowed_ = !fileRoot_.isEmpty() && same_origin(url_, fileOrigin_);
@@ -282,7 +343,7 @@ public:
                      [this] { stop(u"Image download timed out"_s); });
     queue_->enqueue(this);
   }
-  ~NetworkLoad() override {
+  ~NetworkTransfer() override {
     if (reply_) {
       QObject::disconnect(reply_, nullptr, this, nullptr);
       reply_->abort();
@@ -291,6 +352,11 @@ public:
     if (queue_)
       queue_->release(this);
   }
+  void subscribe(QObject *receiver) {
+    shared_ |= !receivers_.isEmpty();
+    receivers_.append(receiver);
+  }
+  void unsubscribe(QObject *receiver) { receivers_.removeOne(receiver); }
   bool done() const { return done_; }
   QString error() const { return error_; }
   qreal progress() const {
@@ -298,28 +364,111 @@ public:
                ? qMin(qreal(1), qreal(input_.length.to_primitive()) / total_)
                : 0;
   }
-  QString identity() const {
-    return url_.toString(QUrl::FullyEncoded) + QLatin1Char('\n') +
-           QString::fromLatin1(hash_.result().toHex());
+  QString identity() const { return resource_.snapshot().identity(); }
+  bool reusable() const { return resource_.snapshot().reusable(); }
+  void cache_target(wi::DecodeRequest size, bool animation, quint64 context,
+                    int frame) {
+    target_ = Some(DecodeTarget{size, animation, context, frame});
   }
-  auto take_file() -> Option<FileTarget> { return fileTarget_.take(); }
+  auto take_cached() -> Option<Request> { return prepared_.take(); }
+  auto cached(wi::DecodeRequest size, bool animation, quint64 context,
+              int frame) const -> Option<Request> {
+    auto snapshot = resource_.snapshot();
+    if (!snapshot.reusable())
+      return None();
+    return Request::cached_source(snapshot.identity(), size, animation, context,
+                                  frame);
+  }
+  static auto cached(QQmlEngine *engine, const QUrl &url,
+                     wi::DecodeRequest size, bool animation, quint64 context,
+                     int frame) -> Option<Request> {
+    auto acquired = NetworkQueue::get(engine)->acquire(url);
+    auto snapshot = acquired.snapshot();
+    if (!snapshot.fresh())
+      return None();
+    return Request::cached_source(snapshot.identity(), size, animation, context,
+                                  frame);
+  }
+  auto take_file() -> Option<FileTarget> {
+    return fileTarget_ ? Some(FileTarget{fileTarget_->path, fileTarget_->root})
+                       : Option<FileTarget>{};
+  }
   auto take_source() -> Result<wi::Source, wi::Error> {
+    if (source_)
+      return Ok(source_->clone());
     if (!done_ || !error_.isEmpty() || input_.length == usize())
       return Err(wi::Error::InvalidInput);
     const auto length = u64(input_.length.to_primitive());
     auto owner = rstd::io::SharedReadAt::try_make(rstd::move(input_));
-    if (owner.is_err())
+    if (owner.is_err()) {
+      error_ = u"Image input memory budget exhausted"_s;
       return Err(wi::Error::ResourceLimit);
+    }
     auto range =
         rstd::io::ReadRange::make(owner.unwrap_unchecked(), u64(), length);
-    if (range.is_err())
+    if (range.is_err()) {
+      error_ = u"Invalid image input range"_s;
       return Err(wi::Error::InvalidInput);
-    return Ok(wi::Source::reader(range.unwrap_unchecked()));
+    }
+    source_ = Some(wi::Source::reader(range.unwrap_unchecked()));
+    return Ok(source_->clone());
   }
 };
 
+export class NetworkLoad : public QObject {
+  QSharedPointer<NetworkTransfer> transfer_;
+  QPointer<QObject> receiver_;
+
+public:
+  NetworkLoad(QQmlEngine *engine, QUrl url, QObject *receiver)
+      : QObject(receiver), transfer_(NetworkQueue::get(engine)->transfer(url)),
+        receiver_(receiver) {
+    transfer_->subscribe(receiver);
+  }
+  ~NetworkLoad() override { transfer_->unsubscribe(receiver_); }
+  bool done() const { return transfer_->done(); }
+  QString error() const { return transfer_->error(); }
+  qreal progress() const { return transfer_->progress(); }
+  QString identity() const { return transfer_->identity(); }
+  bool reusable() const { return transfer_->reusable(); }
+  void cache_target(wi::DecodeRequest size, bool animation, quint64 context,
+                    int frame) {
+    transfer_->cache_target(size, animation, context, frame);
+  }
+  auto take_cached() -> Option<Request> { return transfer_->take_cached(); }
+  auto take_file() -> Option<FileTarget> { return transfer_->take_file(); }
+  auto take_source() -> Result<wi::Source, wi::Error> {
+    return transfer_->take_source();
+  }
+  static auto cached(QQmlEngine *engine, const QUrl &url,
+                     wi::DecodeRequest size, bool animation, quint64 context,
+                     int frame) -> Option<Request> {
+    return NetworkTransfer::cached(engine, url, size, animation, context,
+                                   frame);
+  }
+};
+
+auto NetworkQueue::transfer(const QUrl &url)
+    -> QSharedPointer<NetworkTransfer> {
+  auto found = transfers_.value(url).toStrongRef();
+  if (found && !found->done())
+    return found;
+  for (auto it = transfers_.begin(); it != transfers_.end();)
+    if (it.value().isNull())
+      it = transfers_.erase(it);
+    else
+      ++it;
+  auto created = QSharedPointer<NetworkTransfer>::create(engine_, url);
+  transfers_.insert(url, created.toWeakRef());
+  return created;
+}
+
 NetworkQueue::NetworkQueue(QQmlEngine *engine)
     : QObject(engine), engine_(engine) {
+  auto *manager = engine->networkAccessManager();
+  resources_ = ncq::ResourceCache::get(manager);
+  if (!resources_)
+    resources_ = new ncq::ResourceCache(manager);
   QObject::connect(engine, &QObject::destroyed, this, [this] { shutdown(); });
 }
 
@@ -333,7 +482,7 @@ NetworkQueue *NetworkQueue::get(QQmlEngine *engine) {
   return new NetworkQueue(engine);
 }
 
-void NetworkQueue::enqueue(NetworkLoad *load) {
+void NetworkQueue::enqueue(NetworkTransfer *load) {
   if (closing_) {
     load->stop(u"Image network engine was destroyed"_s);
     return;
@@ -342,7 +491,7 @@ void NetworkQueue::enqueue(NetworkLoad *load) {
   schedule();
 }
 
-void NetworkQueue::release(NetworkLoad *load) {
+void NetworkQueue::release(NetworkTransfer *load) {
   if (closing_)
     return;
   waiting_.retain([load](auto *entry) { return entry != load; });
@@ -389,8 +538,33 @@ bool NetworkQueue::configure_files(QUrl origin, QString directory) {
        (!origin.path().isEmpty() && origin.path() != QLatin1String("/")) ||
        !QDir::isAbsolutePath(directory)))
     return false;
+  const auto root = origin.isEmpty() ? QString() : QDir::cleanPath(directory);
+  if (origin == fileOrigin_ && root == fileRoot_)
+    return true;
   fileOrigin_ = rstd::move(origin);
-  fileRoot_ = fileOrigin_.isEmpty() ? QString() : QDir::cleanPath(directory);
+  fileRoot_ = root;
+  transfers_.clear();
+  resources_->invalidate();
+  return true;
+}
+
+bool NetworkQueue::configure_cache(QList<QUrl> origins, qint64 fallback) {
+  if (fallback < 0)
+    return false;
+  for (const auto &origin : origins)
+    if (!origin.isValid() ||
+        (origin.scheme() != QLatin1String("http") &&
+         origin.scheme() != QLatin1String("https")) ||
+        !origin.userInfo().isEmpty() || origin.hasQuery() ||
+        origin.hasFragment() ||
+        (!origin.path().isEmpty() && origin.path() != QLatin1String("/")))
+      return false;
+  ncq::ResourceOptions options;
+  options.origins = rstd::move(origins);
+  options.fallback_seconds = fallback;
+  options.excluded_response_headers.append("QExtra-Image-Source");
+  transfers_.clear();
+  resources_->configure(options);
   return true;
 }
 
@@ -400,5 +574,27 @@ export bool set_local_file_source(QQmlEngine *engine, QUrl origin,
     return false;
   return NetworkQueue::get(engine)->configure_files(rstd::move(origin),
                                                     rstd::move(directory));
+}
+
+export bool set_network_cache(QQmlEngine *engine, QList<QUrl> origins,
+                              qint64 fallback_seconds = 0) {
+  if (!engine || engine->thread() != QThread::currentThread())
+    return false;
+  return NetworkQueue::get(engine)->configure_cache(rstd::move(origins),
+                                                    fallback_seconds);
+}
+
+export void observe_network_cache(QQmlEngine *engine, QObject *receiver,
+                                  std::function<void(const QUrl &)> callback) {
+  NetworkQueue::get(engine)->observe(receiver, rstd::move(callback));
+}
+
+export void clear_network_cache(QQmlEngine *engine) {
+  if (engine && engine->thread() == QThread::currentThread())
+    NetworkQueue::get(engine)->clear_cache();
+}
+
+export auto network_statistics(QQmlEngine *engine) -> NetworkStatistics {
+  return NetworkQueue::get(engine)->statistics();
 }
 } // namespace qextra::image

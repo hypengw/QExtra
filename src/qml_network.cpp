@@ -3,6 +3,7 @@ module;
 
 module qextra;
 import :qml_network;
+import ncrequest;
 
 using namespace Qt::Literals::StringLiterals;
 
@@ -18,12 +19,9 @@ public:
     auto create(QObject* parent) -> QNetworkAccessManager* override {
         auto* manager = new QNetworkAccessManager(parent);
         if (! m_cache_dir.isEmpty()) {
-            auto* cache = new QNetworkDiskCache(manager);
-            cache->setCacheDirectory(m_cache_dir);
-            if (m_maximum_cache_size) {
-                cache->setMaximumCacheSize(*m_maximum_cache_size);
-            }
-            manager->setCache(cache);
+            auto* resources = new ncrequest::client::qt_network::ResourceCache(manager);
+            auto* cache = resources->install_disk_cache(
+                m_cache_dir, m_maximum_cache_size.value_or(50 * 1024 * 1024));
             m_cache = cache;
         }
         return manager;
