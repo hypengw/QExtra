@@ -54,12 +54,23 @@ Window {
     auto *still = root->findChild<qextra::Image *>("still");
     auto *animation = root->findChild<qextra::AnimatedImage *>("animation");
     rstd_assert(window && still && animation);
+    QImage decoded;
+    QUrl decodedSource;
+    QObject::connect(still, &qextra::Image::frameReady,
+                     [&](const QUrl &url, const QImage &image) {
+                       decodedSource = url;
+                       decoded = image;
+                     });
     still->setSource(source);
     rstd_assert(
         wait_for([&] { return still->status() == qextra::Image::Ready; }));
     rstd_assert(still->implicitWidth() == 2 && still->implicitHeight() == 1);
     rstd_assert(still->sourceSize() == QSize(2, 1));
     rstd_assert(still->maxSize() == QSize(512, 512));
+    rstd_assert(decodedSource == source && decoded.size() == QSize(2, 1));
+    rstd_assert(decoded.pixelColor(0, 0) == QColor(Qt::red));
+    rstd_assert(decoded.pixelColor(1, 0) == QColor(Qt::green));
+    decoded = {};
     rstd_assert(wait_for([&] {
       auto capture = window->grabWindow();
       if (capture.isNull())

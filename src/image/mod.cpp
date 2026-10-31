@@ -455,6 +455,11 @@ public:
     state(Image::Ready);
     if (!valid())
       return;
+    const auto frameSource = source;
+    const auto frameImage = pending;
+    emit item->frameReady(frameSource, frameImage);
+    if (!valid())
+      return;
     emit item->paintedGeometryChanged();
     if (!valid())
       return;

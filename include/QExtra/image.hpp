@@ -2,6 +2,7 @@
 
 #include <QtCore/QUrl>
 #include <QtCore/QVariantMap>
+#include <QtGui/QImage>
 #include <QtQml/qqmlregistration.h>
 #include <QtQuick/QQuickItem>
 #include <QtQuick/QQuickWindow>
@@ -128,6 +129,7 @@ signals:
   void preparationScopeChanged();
   void sourceChanged();
   void statusChanged();
+  void frameReady(const QUrl &source, const QImage &image);
   void progressChanged();
   void sourceSizeChanged();
   void maxSizeChanged();
