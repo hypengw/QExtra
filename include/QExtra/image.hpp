@@ -37,6 +37,7 @@ class Image : public QQuickItem {
   Q_PROPERTY(QString errorString READ errorString NOTIFY statusChanged)
   Q_PROPERTY(QSize sourceSize READ sourceSize WRITE setSourceSize NOTIFY
                  sourceSizeChanged)
+  Q_PROPERTY(QSize intrinsicSize READ intrinsicSize NOTIFY intrinsicSizeChanged)
   Q_PROPERTY(QSize maxSize READ maxSize WRITE setMaxSize NOTIFY maxSizeChanged)
   Q_PROPERTY(
       FillMode fillMode READ fillMode WRITE setFillMode NOTIFY fillModeChanged)
@@ -100,6 +101,8 @@ public:
   QString errorString() const;
   QSize sourceSize() const;
   void setSourceSize(QSize);
+  // Source pixels before decode resizing; (0, 0) until known.
+  QSize intrinsicSize() const;
   QSize maxSize() const;
   void setMaxSize(QSize);
   FillMode fillMode() const;
@@ -132,6 +135,7 @@ signals:
   void frameReady(const QUrl &source, const QImage &image);
   void progressChanged();
   void sourceSizeChanged();
+  void intrinsicSizeChanged();
   void maxSizeChanged();
   void fillModeChanged();
   void paintedGeometryChanged();

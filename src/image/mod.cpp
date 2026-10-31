@@ -123,6 +123,7 @@ public:
   QSize requested;
   QSize maximum;
   QSize pixels;
+  QSize intrinsic{0, 0};
   Image::Status status{Image::Null};
   Image::FillMode fill{Image::Stretch};
   QString error;
@@ -266,12 +267,11 @@ public:
     playback = None();
     return true;
   }
-  void reload(bool keepImage = false) {
+  void cancelRequest() {
     ++generation;
     delete download;
     download = nullptr;
     networkUrl = QUrl();
-    setProgress(0);
     stopClock();
     request = None();
     playback = None();
@@ -283,6 +283,17 @@ public:
     needsFrame = true;
     iteration = 0;
     deadline = position();
+  }
+  void reload(bool keepImage = false) {
+    cancelRequest();
+    load(keepImage);
+  }
+  void load(bool keepImage = false) {
+    QPointer<Image> guard(item);
+    const auto before = generation;
+    setProgress(0);
+    if (!guard || guard->d->generation != before)
+      return;
     if (!retain && !keepImage) {
       pixels = {};
       item->setImplicitSize(0, 0);
@@ -469,6 +480,30 @@ public:
       stopClock();
     }
   }
+  bool publishInfo(const wi::ImageInfo &info) {
+    QPointer<Image> guard(item);
+    const auto before = generation;
+    auto valid = [&] { return guard && guard->d->generation == before; };
+    if (info.width > u32() && info.height > u32() &&
+        info.width <= u32(0x7fffffff) && info.height <= u32(0x7fffffff)) {
+      const QSize size(int(info.width.to_primitive()),
+                       int(info.height.to_primitive()));
+      if (size != intrinsic) {
+        intrinsic = size;
+        emit item->intrinsicSizeChanged();
+        if (!valid())
+          return false;
+      }
+    }
+    if (info.frame_count != u64() &&
+        frameCount != int(info.frame_count.to_primitive())) {
+      frameCount = int(info.frame_count.to_primitive());
+      emit item->frameCountChanged();
+      if (!valid())
+        return false;
+    }
+    return true;
+  }
   void tick() {
     stopClock();
     if (invalidated.exchange(false, rstd::sync::atomic::Ordering::AcqRel)) {
@@ -575,15 +610,8 @@ public:
                  .arg(int(*result.error)));
         return;
       }
-      QPointer<Image> guard(item);
-      const auto before = generation;
-      if (result.info.frame_count != u64() &&
-          frameCount != int(result.info.frame_count.to_primitive())) {
-        frameCount = int(result.info.frame_count.to_primitive());
-        emit item->frameCountChanged();
-        if (!guard || generation != before)
-          return;
-      }
+      if (!publishInfo(result.info))
+        return;
       if (result.frame)
         publish(result.frame.unwrap_unchecked(), Some(result.remaining));
       return;
@@ -602,11 +630,8 @@ public:
         candidate = result.frame.take();
         awaiting = false;
       }
-      if (result.info.frame_count != u64() &&
-          frameCount != int(result.info.frame_count.to_primitive())) {
-        frameCount = int(result.info.frame_count.to_primitive());
-        emit item->frameCountChanged();
-      }
+      if (!publishInfo(result.info))
+        return;
       if (result.eof) {
         awaiting = false;
         if (needsFrame) {
@@ -934,6 +959,12 @@ QUrl Image::source() const { return d->source; }
 void Image::setSource(const QUrl &value) {
   if (d->source == value)
     return;
+  QPointer<Image> guard(this);
+  d->cancelRequest();
+  const auto before = d->generation;
+  auto valid = [&] { return guard && guard->d->generation == before; };
+  const bool changedIntrinsic = !d->intrinsic.isEmpty();
+  d->intrinsic = QSize(0, 0);
   d->source = value;
   if (isComponentComplete())
     d->independentControl = false;
@@ -944,9 +975,17 @@ void Image::setSource(const QUrl &value) {
   if (isComponentComplete())
     d->seekFrame = 0;
   d->frameCount = 0;
+  if (changedIntrinsic) {
+    emit intrinsicSizeChanged();
+    if (!valid())
+      return;
+  }
   emit sourceChanged();
+  if (!valid())
+    return;
   emit frameCountChanged();
-  d->reload();
+  if (valid())
+    d->load();
 }
 Image::Status Image::status() const { return d->status; }
 qreal Image::progress() const { return d->progress; }
@@ -957,6 +996,7 @@ QSize Image::sourceSize() const {
           d->requested.height() != -1 ? d->requested.height()
                                       : qMax(0, d->pixels.height())};
 }
+QSize Image::intrinsicSize() const { return d->intrinsic; }
 void Image::setSourceSize(QSize value) {
   if (value == d->requested)
     return;
