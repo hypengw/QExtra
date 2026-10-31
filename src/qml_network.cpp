@@ -19,7 +19,11 @@ public:
     auto create(QObject* parent) -> QNetworkAccessManager* override {
         auto* manager = new QNetworkAccessManager(parent);
         if (! m_cache_dir.isEmpty()) {
-            auto* resources = new ncrequest::client::qt_network::ResourceCache(manager);
+            ncrequest::client::qt_network::ResourceOptions options;
+            options.all_origins = true;
+            options.excluded_response_headers.append("QExtra-Image-Source");
+            auto* resources = new ncrequest::client::qt_network::ResourceCache(
+                manager, std::move(options));
             auto* cache = resources->install_disk_cache(
                 m_cache_dir, m_maximum_cache_size.value_or(50 * 1024 * 1024));
             m_cache = cache;

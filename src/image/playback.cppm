@@ -107,7 +107,8 @@ public:
   void tick(qreal time) {
     if (active == usize() || error || finished)
       return;
-    if (awaiting) {
+    // A cached request can hold its first frame before advance() is called.
+    if (awaiting || !current) {
       auto result = request.poll();
       info = result.info;
       if (result.error) {

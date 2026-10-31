@@ -15,6 +15,97 @@ template <class F> bool until(F predicate) {
   }
   return predicate();
 }
+
+void test_scroll_return(const QUrl &source) {
+  QQmlEngine engine;
+  QQmlComponent component(&engine);
+  component.setData(R"(
+import QtQuick
+import QtQuick.Window
+import QExtra as QE
+Window {
+  visible: true; width: 128; height: 64; color: "blue"
+  Flickable {
+    id: viewport
+    objectName: "viewport"; anchors.fill: parent; clip: true
+    contentWidth: width; contentHeight: 256; interactive: false
+    Item {
+      objectName: "host"; width: 64; height: 64
+      QE.AnimatedImage {
+        objectName: "subject"; anchors.fill: parent; smooth: false
+        fillMode: QE.Image.Stretch; sharedPlayback: true
+        preparationScope: viewport
+      }
+    }
+  }
+})",
+                    QUrl("qrc:/scroll-return.qml"));
+  auto *root = component.create();
+  if (!root)
+    qCritical() << component.errors();
+  rstd_assert(root);
+  auto *window = qobject_cast<QQuickWindow *>(root);
+  auto *viewport = root->findChild<QQuickItem *>("viewport");
+  auto *host = root->findChild<QQuickItem *>("host");
+  auto *image = root->findChild<qextra::AnimatedImage *>("subject");
+  rstd_assert(window && viewport && host && image);
+  rstd_assert(qextra::image::set_texture_cache_limit(window, 0));
+  auto stats = [&] { return qextra::image::texture_statistics(window); };
+  auto color = [&](bool visible) {
+    const auto pixels = window->grabWindow();
+    if (pixels.isNull())
+      return false;
+    const auto sample = pixels.pixelColor(8 * pixels.width() / window->width(),
+                                          pixels.height() / 2);
+    return visible
+               ? sample.red() > 240 && sample.green() < 10 && sample.blue() < 10
+               : sample.blue() > 240 && sample.red() < 10;
+  };
+  image->setSource(source);
+  rstd_assert(until(
+      [&] { return image->status() == qextra::Image::Ready && color(true); }));
+  for (bool moveHost : {false, true}) {
+    auto position = [&](bool outside) {
+      if (moveHost)
+        host->setY(outside ? 96 : 0);
+      else
+        viewport->setProperty("contentY", outside ? 96 : 0);
+      rstd_assert(image->position() == QPointF(0, 0));
+      rstd_assert(image->size() == QSizeF(64, 64));
+      rstd_assert(image->source() == source);
+    };
+    position(true);
+    image->setLoadingMode(qextra::Image::Prefetch);
+    rstd_assert(until([&] { return color(false); }));
+    position(false);
+    image->setLoadingMode(qextra::Image::Automatic);
+    rstd_assert(until([&] {
+      return image->status() == qextra::Image::Ready && color(true);
+    }));
+
+    position(true);
+    image->setLoadingMode(qextra::Image::Prefetch);
+    rstd_assert(until([&] { return color(false); }));
+    image->setLoadingMode(qextra::Image::Suspended);
+    rstd_assert(until([&] {
+      window->grabWindow();
+      return stats().active_bytes == 0 && stats().idle_bytes == 0 &&
+             stats().pending_release_bytes == 0;
+    }));
+    const auto uploads = stats().uploads;
+    image->setLoadingMode(qextra::Image::Prefetch);
+    rstd_assert(until([&] { return color(false); }));
+    position(false);
+    image->setLoadingMode(qextra::Image::Automatic);
+    rstd_assert(until([&] {
+      return image->status() == qextra::Image::Ready && color(true) &&
+             stats().uploads > uploads;
+    }));
+  }
+  delete root;
+  qInfo() << "image ancestor scroll, retained return and pooled texture "
+             "restore passed";
+}
 } // namespace
 int run_image_texture(int argc, char **argv) {
   QGuiApplication app(argc, argv);
@@ -291,6 +382,7 @@ Window {
   rstd_assert(
       until([&] { return prepared->status() == qextra::Image::Ready; }));
   delete root;
+  test_scroll_return(source);
   qextra::image::clear_cache();
   rstd_assert(
       until([] { return qextra::image::statistics().live_bytes == usize(); }));

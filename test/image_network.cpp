@@ -92,6 +92,88 @@ public:
   }
 };
 
+void test_production_cache(const QUrl &first, const QUrl &second,
+                           QHash<QByteArray, int> &hits) {
+  QTemporaryDir directory;
+  rstd_assert(directory.isValid());
+  const QUrl urls[] = {first.resolved(QUrl("/production-cached-first")),
+                       second.resolved(QUrl("/production-cached-second"))};
+  const QByteArray paths[] = {"/production-cached-first",
+                              "/production-cached-second"};
+  const auto noStore = first.resolved(QUrl("/production-no-store"));
+  const auto file = first.resolved(QUrl("/production-file"));
+  auto download = [](QQmlEngine &engine, const QUrl &url) {
+    qextra::image::NetworkLoad load(&engine, url, nullptr);
+    rstd_assert(wait_for([&] { return load.done(); }));
+    rstd_assert(load.error().isEmpty());
+    rstd_assert(load.take_source().is_ok());
+  };
+  auto verifyFresh = [](QQmlEngine &engine, const QUrl &url) {
+    auto *resources = ncrequest::client::qt_network::ResourceCache::get(
+        engine.networkAccessManager());
+    rstd_assert(resources);
+    rstd_assert(wait_for([&] {
+      return resources->acquire(QNetworkRequest(url)).snapshot().fresh();
+    }));
+  };
+  {
+    QmlNetworkDiskCache cache(directory.path(), 50 * 1024 * 1024);
+    QQmlEngine engine;
+    cache.install(engine);
+    auto *disk = engine.networkAccessManager()->cache();
+    rstd_assert(disk);
+    for (int i = 0; i < 2; ++i) {
+      download(engine, urls[i]);
+      verifyFresh(engine, urls[i]);
+      rstd_assert(hits[paths[i]] == 1);
+      rstd_assert(wait_for([&] { return disk->metaData(urls[i]).isValid(); }));
+      download(engine, urls[i]);
+      verifyFresh(engine, urls[i]);
+      rstd_assert(hits[paths[i]] == 1);
+    }
+    rstd_assert(wait_for([&] { return cache.cacheSize() > 0; }));
+    download(engine, noStore);
+    download(engine, noStore);
+    rstd_assert(hits["/production-no-store"] == 2);
+    rstd_assert(!disk->metaData(noStore).isValid());
+    for (int i = 0; i < 2; ++i) {
+      auto *reply = engine.networkAccessManager()->get(QNetworkRequest(file));
+      rstd_assert(wait_for([&] { return reply->isFinished(); }));
+      rstd_assert(reply->error() == QNetworkReply::NoError);
+      rstd_assert(
+          reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt() ==
+          200);
+      rstd_assert(reply->readAll() == "local image response");
+      reply->deleteLater();
+      rstd_assert(hits["/production-file"] == i + 1);
+      rstd_assert(!disk->metaData(file).isValid());
+    }
+  }
+  {
+    QmlNetworkDiskCache cache(directory.path(), 50 * 1024 * 1024);
+    QQmlEngine engine;
+    cache.install(engine);
+    auto *disk = engine.networkAccessManager()->cache();
+    rstd_assert(disk && cache.cacheSize() > 0);
+    for (int i = 0; i < 2; ++i) {
+      rstd_assert(disk->metaData(urls[i]).isValid());
+      download(engine, urls[i]);
+      verifyFresh(engine, urls[i]);
+      rstd_assert(hits[paths[i]] == 1);
+    }
+    cache.clear();
+    rstd_assert(wait_for([&] { return cache.cacheSize() == 0; }));
+    for (int i = 0; i < 2; ++i) {
+      rstd_assert(!disk->metaData(urls[i]).isValid());
+      download(engine, urls[i]);
+      verifyFresh(engine, urls[i]);
+      rstd_assert(hits[paths[i]] == 2);
+    }
+  }
+  qInfo() << "QmlNetworkDiskCache default origins, persistence, clear and "
+             "response exclusions passed";
+}
+
 void test_queue() {
   ControlledFactory first, second;
   auto *engine = new QQmlEngine;
@@ -212,8 +294,9 @@ int run_image_network(int argc, char **argv) {
     rstd_assert(file.open(QIODevice::ReadOnly));
     animations.push_back(file.readAll());
   }
-  QTcpServer server;
+  QTcpServer server, secondServer;
   rstd_assert(server.listen(QHostAddress::LocalHost));
+  rstd_assert(secondServer.listen(QHostAddress::LocalHost));
   QHash<QByteArray, int> hits;
   bool blue{};
   auto url = [&](const char *path) {
@@ -221,8 +304,8 @@ int run_image_network(int argc, char **argv) {
                     .arg(server.serverPort())
                     .arg(QLatin1String(path)));
   };
-  QObject::connect(&server, &QTcpServer::newConnection, &server, [&] {
-    while (auto *socket = server.nextPendingConnection()) {
+  auto accept = [&](QTcpServer &listener) {
+    while (auto *socket = listener.nextPendingConnection()) {
       QObject::connect(socket, &QTcpSocket::disconnected, socket,
                        &QObject::deleteLater);
       QObject::connect(socket, &QTcpSocket::readyRead, socket, [&, socket] {
@@ -249,8 +332,8 @@ int run_image_network(int argc, char **argv) {
         body += path == "/changing" && blue ? QByteArray::fromHex("0000ff")
                                             : QByteArray::fromHex("ff0000");
         QByteArray status("200 OK"), extra;
-        if (path.startsWith("/file") || path == "/outside" ||
-            path == "/escape") {
+        if (path.startsWith("/file") || path == "/production-file" ||
+            path == "/outside" || path == "/escape") {
           auto target = path == "/outside"  ? outsideImage
                         : path == "/escape" ? files.filePath("escape.ppm")
                         : path == "/file-missing"
@@ -259,7 +342,8 @@ int run_image_network(int argc, char **argv) {
                                               : fileImage;
           extra = "QExtra-Image-Source: " +
                   QUrl::fromLocalFile(target).toEncoded() + "\r\n";
-          body.clear();
+          body = path == "/production-file" ? QByteArray("local image response")
+                                            : QByteArray();
           if (path == "/file-error")
             status = "404 Not Found";
           if (path == "/file-duplicate")
@@ -295,7 +379,7 @@ int run_image_network(int argc, char **argv) {
         }
         if (path == "/gif")
           body = gif;
-        if (path == "/cached")
+        if (path == "/cached" || path.startsWith("/production-cached-"))
           body = QByteArray("P6\n350 350\n255\n") +
                  QByteArray(350 * 350 * 3, char(255));
         if (path == "/large" || path == "/progress")
@@ -339,7 +423,9 @@ int run_image_network(int argc, char **argv) {
           if (path == "/validated")
             extra += "ETag: \"image-1\"\r\nCache-Control: no-cache\r\n";
           else if (path != "/fallback")
-            extra += path == "/cached"
+            extra += path == "/cached" ||
+                             path.startsWith("/production-cached-") ||
+                             path == "/production-file"
                          ? "Cache-Control: public, max-age=3600\r\n"
                          : "Cache-Control: no-store\r\n";
           socket->write("HTTP/1.1 " + status + "\r\n" + extra +
@@ -349,7 +435,16 @@ int run_image_network(int argc, char **argv) {
         socket->disconnectFromHost();
       });
     }
-  });
+  };
+  QObject::connect(&server, &QTcpServer::newConnection, &server,
+                   [&] { accept(server); });
+  QObject::connect(&secondServer, &QTcpServer::newConnection, &secondServer,
+                   [&] { accept(secondServer); });
+  test_production_cache(
+      url(""),
+      QUrl(
+          QStringLiteral("http://127.0.0.1:%1").arg(secondServer.serverPort())),
+      hits);
   Factory factory;
   auto *engine = new QQmlEngine;
   engine->setNetworkAccessManagerFactory(&factory);
@@ -454,6 +549,29 @@ Window {
   rstd_assert(hits["/cached"] == cached);
   rstd_assert(factory.manager->requests == cachedRequests);
   rstd_assert(qextra::image::service_statistics().decoded == decoded);
+  {
+    const auto before = qextra::image::network_statistics(engine).requests;
+    peer->setVisible(true);
+    peer->setSource(url("/cached"));
+    const bool ready =
+        wait_for([&] { return peer->status() == qextra::Image::Ready; });
+    if (!ready) {
+      const auto playback = qextra::image::playback_statistics(engine);
+      const auto service = qextra::image::service_statistics();
+      qWarning() << "cached shared image stalled" << peer->status() << "network"
+                 << qextra::image::network_statistics(engine).requests - before
+                 << "decoded" << (service.decoded - decoded).to_primitive()
+                 << "sessions" << playback.sessions.to_primitive() << "active"
+                 << playback.active.to_primitive() << "pumps" << playback.pumps
+                 << "running" << service.running.to_primitive() << "waiting"
+                 << service.waiting.to_primitive();
+    }
+    rstd_assert(ready);
+    rstd_assert(qextra::image::network_statistics(engine).requests == before);
+    rstd_assert(qextra::image::service_statistics().decoded == decoded);
+    peer->setSource(QUrl());
+    peer->setVisible(false);
+  }
   const auto pixelRequests = factory.manager->requests;
   qextra::image::clear_cache();
   load("/cached");
