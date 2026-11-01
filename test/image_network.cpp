@@ -192,7 +192,7 @@ void test_queue() {
       wait_for([&] { return first.manager && first.manager->active == 8; }));
   rstd_assert(first.manager->started.size() == 8 && first.manager->peak == 8);
   for (int i = 0; i < 8; ++i)
-    rstd_assert(first.manager->started[i] == url(11 - i));
+    rstd_assert(first.manager->started[i] == url(i));
   for (int i = 0; i < 9; ++i)
     otherLoads.append(new qextra::image::NetworkLoad(&other, url(i), nullptr));
   rstd_assert(
@@ -204,14 +204,14 @@ void test_queue() {
   delete loads[10];
   loads[10] = nullptr;
   rstd_assert(wait_for([&] { return first.manager->started.size() == 9; }));
-  rstd_assert(first.manager->started.last() == url(3));
+  rstd_assert(first.manager->started.last() == url(8));
   first.manager->replies[0]->complete();
   rstd_assert(wait_for([&] { return first.manager->started.size() == 10; }));
-  rstd_assert(first.manager->started.last() == url(2));
+  rstd_assert(first.manager->started.last() == url(9));
   first.manager->replies[2]->complete(QNetworkReply::ContentNotFoundError);
   rstd_assert(wait_for([&] { return first.manager->started.size() == 11; }));
-  rstd_assert(first.manager->started.last() == url(0));
-  rstd_assert(!first.manager->started.contains(url(1)));
+  rstd_assert(first.manager->started.last() == url(11));
+  rstd_assert(!first.manager->started.contains(url(10)));
   rstd_assert(first.manager->peak == 8 && first.manager->active == 8);
 
   for (int i = 12; i < 15; ++i)
@@ -254,24 +254,86 @@ void test_queue() {
     return priorityFactory.manager && priorityFactory.manager->active == 6;
   }));
   rstd_assert(priorityFactory.manager->started.size() == 6);
-  preparation[0]->set_prefetch(false);
+  for (int i = 0; i < 6; ++i)
+    rstd_assert(priorityFactory.manager->started[i] == url(40 + i));
+  preparation[8]->set_prefetch(false);
   rstd_assert(wait_for([&] { return priorityFactory.manager->active == 7; }));
-  rstd_assert(priorityFactory.manager->started.last() == url(40));
+  rstd_assert(priorityFactory.manager->started.last() == url(48));
   auto *visibleLoad =
       new qextra::image::NetworkLoad(&priorityEngine, url(100), nullptr);
   rstd_assert(wait_for([&] { return priorityFactory.manager->active == 8; }));
-  rstd_assert(priorityFactory.manager->started.count(url(40)) == 1);
+  rstd_assert(priorityFactory.manager->started.count(url(48)) == 1);
   delete visibleLoad;
   qDeleteAll(preparation);
   rstd_assert(priorityFactory.manager->active == 0);
   qInfo()
       << "network queue engine isolation, limit, order and cancellation passed";
 }
+
+void test_queue_priority_fifo() {
+  ControlledFactory factory;
+  QQmlEngine engine;
+  engine.setNetworkAccessManagerFactory(&factory);
+  auto url = [](int index) {
+    return QUrl(QStringLiteral("https://fifo.invalid/image%1").arg(index));
+  };
+  auto enqueue = [&](int index, bool prefetch) {
+    auto *load = new qextra::image::NetworkLoad(&engine, url(index), nullptr);
+    load->set_prefetch(prefetch);
+    return load;
+  };
+  QList<qextra::image::NetworkLoad *> blockers, waiting;
+  for (int i = 0; i < 8; ++i)
+    blockers.append(enqueue(i, false));
+  rstd_assert(wait_for(
+      [&] { return factory.manager && factory.manager->active == 8; }));
+  for (int i = 0; i < 8; ++i)
+    rstd_assert(factory.manager->started[i] == url(i));
+  for (int i = 0; i < 6; ++i)
+    waiting.append(enqueue(100 + i, i % 2 == 0));
+  waiting[2]->set_prefetch(false);
+  auto *sharedVisible = enqueue(100, false);
+  delete sharedVisible;
+  delete waiting[3];
+  waiting[3] = nullptr;
+  const int visible[] = {101, 102, 105};
+  for (int i = 0; i < 3; ++i) {
+    factory.manager->replies[i]->complete();
+    rstd_assert(
+        wait_for([&] { return factory.manager->started.size() == 9 + i; }));
+    rstd_assert(factory.manager->started.last() == url(visible[i]));
+    rstd_assert(factory.manager->active == 8);
+  }
+  for (int i = 3; i < 5; ++i) {
+    factory.manager->replies[i]->complete();
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+    rstd_assert(factory.manager->started.size() == 11);
+    rstd_assert(factory.manager->active == 10 - i);
+  }
+  factory.manager->replies[5]->complete();
+  rstd_assert(wait_for([&] { return factory.manager->started.size() == 12; }));
+  rstd_assert(factory.manager->started.last() == url(100));
+  rstd_assert(factory.manager->active == 6);
+  factory.manager->replies[6]->complete();
+  rstd_assert(wait_for([&] { return factory.manager->started.size() == 13; }));
+  rstd_assert(factory.manager->started.last() == url(104));
+  rstd_assert(factory.manager->active == 6 && factory.manager->peak == 8);
+  rstd_assert(factory.manager->started.count(url(100)) == 1);
+  rstd_assert(!factory.manager->started.contains(url(103)));
+  qDeleteAll(blockers);
+  qDeleteAll(waiting);
+  rstd_assert(factory.manager->active == 0);
+  QCoreApplication::sendPostedEvents(nullptr, QEvent::MetaCall);
+  rstd_assert(factory.manager->started.size() == 13);
+  qInfo() << "network queue priority FIFO, stable promotion and shared "
+             "subscriber cancellation passed";
+}
 } // namespace
 
 int run_image_network(int argc, char **argv) {
   QGuiApplication app(argc, argv);
   test_queue();
+  test_queue_priority_fifo();
   QTemporaryDir files, outside;
   rstd_assert(files.isValid() && outside.isValid());
   auto write = [](QString path, QByteArray bytes) {

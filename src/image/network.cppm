@@ -535,12 +535,14 @@ void NetworkQueue::schedule() {
         while (!closing_ && active_.len() < usize(8) && !waiting_.is_empty()) {
           Option<usize> selected;
           for (usize i; i < waiting_.len(); ++i)
-            if (!waiting_[i]->prefetch())
+            if (!waiting_[i]->prefetch()) {
               selected = Some(i);
+              break;
+            }
           if (!selected) {
             if (active_.len() >= usize(6))
               break;
-            selected = Some(waiting_.len() - usize(1));
+            selected = Some(usize());
           }
           auto *load = waiting_.remove(*selected);
           active_.emplace_back(load);
