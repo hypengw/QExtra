@@ -71,6 +71,32 @@ Window {
     rstd_assert(decoded.pixelColor(0, 0) == QColor(Qt::red));
     rstd_assert(decoded.pixelColor(1, 0) == QColor(Qt::green));
     decoded = {};
+    {
+      const auto before = qextra::image::service_statistics().decoded;
+      QQmlComponent hiddenComponent(&engine);
+      hiddenComponent.setData(R"(
+import QtQuick
+import QExtra as QE
+QE.Image {
+    width: 64; height: 64; visible: false
+    maxSize: Qt.size(512, 512)
+})",
+                              QUrl("qrc:/hidden-shared-image.qml"));
+      for (int repeat = 0; repeat < 3; ++repeat) {
+        std::unique_ptr<QObject> hiddenObject(
+            hiddenComponent.createWithInitialProperties({{"source", source}}));
+        auto *hidden = qobject_cast<qextra::Image *>(hiddenObject.get());
+        rstd_assert(hidden);
+        hidden->setParentItem(window->contentItem());
+        QCoreApplication::sendPostedEvents();
+        QCoreApplication::processEvents();
+        rstd_assert(hidden->status() == qextra::Image::Loading);
+        hidden->setVisible(true);
+        rstd_assert(
+            wait_for([&] { return hidden->status() == qextra::Image::Ready; }));
+        rstd_assert(qextra::image::service_statistics().decoded == before);
+      }
+    }
     rstd_assert(wait_for([&] {
       auto capture = window->grabWindow();
       if (capture.isNull())

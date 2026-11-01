@@ -679,6 +679,9 @@ public:
       if (awaiting) {
         rewind = false;
         seekFrame = 0;
+        // A shared result may already be ready after its notice arrived while
+        // hidden.
+        wake();
       }
     }
     if (candidate && running && clock)
