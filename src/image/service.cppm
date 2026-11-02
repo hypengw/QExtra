@@ -2,6 +2,7 @@ export module qextra:image.service;
 import qextra.qt;
 export import wavsen.image;
 import rstd;
+import ncrequest;
 
 using namespace rstd::prelude;
 using rstd::sync::Arc;
@@ -9,9 +10,28 @@ using rstd::sync::Mutex;
 using rstd::sync::atomic::Atomic;
 using rstd::sync::atomic::Ordering;
 namespace wi = wavsen::image;
+namespace ncq = ncrequest::client::qt_network;
 
 namespace qextra::image {
 export constexpr int maximum_cache_mib = 512;
+export struct DisplayHandle {
+private:
+  Mutex<ncq::ResourceSnapshot> source_;
+
+public:
+  const quint64 identity;
+  const QSize size;
+  const wi::ImageInfo info;
+  DisplayHandle(ncq::ResourceSnapshot source, quint64 id, QSize pixels,
+                wi::ImageInfo metadata)
+      : source_(rstd::move(source)), identity(id), size(pixels),
+        info(metadata) {}
+  void retain_source(ncq::ResourceSnapshot source) {
+    auto locked = source_.lock().unwrap_unchecked();
+    if (source.revision() > locked->revision())
+      *locked = rstd::move(source);
+  }
+};
 struct Counts {
   Atomic<usize> payloads;
   Atomic<usize> workers;
@@ -61,9 +81,11 @@ export struct Frame {
   Arc<Counts> counts;
   quint64 displayId;
   bool cacheable;
-  Frame(wi::DecodedImage value, Arc<Counts> owner, quint64 id, bool retained)
+  QSharedPointer<DisplayHandle> display;
+  Frame(wi::DecodedImage value, Arc<Counts> owner, quint64 id, bool retained,
+        QSharedPointer<DisplayHandle> handle = {})
       : image(rstd::move(value)), counts(rstd::move(owner)), displayId(id),
-        cacheable(retained) {}
+        cacheable(retained), display(rstd::move(handle)) {}
   ~Frame() { counts->payloads.fetch_sub(usize(1), Ordering::Release); }
 };
 
@@ -109,12 +131,15 @@ struct State {
   Atomic<usize> visibleSubscribers{usize(1)};
   wi::DecodeRequest size;
   wi::Cancellation cancellation;
+  Mutex<ncq::ResourceSnapshot> resource;
   Mutex<Fields> fields;
   State(QString p, Option<wi::Source> source, Key k, bool a, bool cached,
-        wi::DecodeRequest s, wi::Cancellation c, QString root)
+        wi::DecodeRequest s, wi::Cancellation c, QString root,
+        ncq::ResourceSnapshot snapshot = {})
       : path(rstd::move(p)), fileRoot(rstd::move(root)),
         input(rstd::move(source)), key(rstd::move(k)), animation(a),
-        cache(cached), size(s), cancellation(rstd::move(c)), fields(Fields{}) {}
+        cache(cached), size(s), cancellation(rstd::move(c)),
+        resource(rstd::move(snapshot)), fields(Fields{}) {}
 };
 
 export struct Poll {
@@ -127,6 +152,7 @@ export struct Poll {
 struct DisplayResult {
   wi::DecodedImage image;
   quint64 identity;
+  QSharedPointer<DisplayHandle> display;
 };
 
 struct Service {
@@ -156,6 +182,8 @@ struct Service {
   };
   struct Cache {
     Vec<CacheEntry> entries{Vec<CacheEntry>::make()};
+    QHash<QString, QWeakPointer<DisplayHandle>> displays;
+    QStringList displaySweep;
     usize bytes;
     usize clock;
     usize limit{usize(16 * 1024 * 1024)};
@@ -262,6 +290,33 @@ struct Service {
             size.max_height,
             ownedSource};
   }
+  static QString display_key(const Key &key) {
+    return key.path + QString::fromLatin1("\n%1:%2:%3:%4:%5:%6:%7")
+                          .arg(key.width.to_primitive())
+                          .arg(key.height.to_primitive())
+                          .arg(key.context)
+                          .arg(key.frame)
+                          .arg(int(key.mode))
+                          .arg(key.maxWidth.to_primitive())
+                          .arg(key.maxHeight.to_primitive());
+  }
+  static void sweep_displays(Cache &cache) {
+    for (int work = 0; work < 4 && !cache.displaySweep.isEmpty(); ++work) {
+      const auto name = cache.displaySweep.takeFirst();
+      auto found = cache.displays.find(name);
+      if (found == cache.displays.end())
+        continue;
+      if (found.value().isNull())
+        cache.displays.erase(found);
+      else
+        cache.displaySweep.append(name);
+    }
+  }
+  auto display(const Key &key) -> QSharedPointer<DisplayHandle> {
+    auto locked = cache.lock().unwrap_unchecked();
+    sweep_displays(*locked);
+    return locked->displays.value(display_key(key)).toStrongRef();
+  }
   auto cached(Key key, int index, wi::ImageInfo &info, bool &eof)
       -> Option<DisplayResult> {
     key.frame = 0;
@@ -274,14 +329,35 @@ struct Service {
         counts->hits.fetch_add(usize(1), Ordering::Relaxed);
         return eof ? Option<DisplayResult>{}
                    : Some(DisplayResult{copy(entry.frames[usize(index)].image),
-                                        entry.frames[usize(index)].identity});
+                                        entry.frames[usize(index)].identity,
+                                        entry.frames[usize(index)].display});
       }
     return None();
   }
   void remember(Key key, wi::DecodedImage *image, wi::ImageInfo info,
-                quint64 &identity) {
+                quint64 &identity, const ncq::ResourceSnapshot &resource,
+                QSharedPointer<DisplayHandle> &display) {
     key.frame = 0;
     auto locked = cache.lock().unwrap_unchecked();
+    locked->entries.retain(
+        [](const CacheEntry &entry) { return !entry.frames.is_empty(); });
+    if (image && !info.animated && !resource.identity().isEmpty()) {
+      const auto name = display_key(key);
+      display = locked->displays.value(name).toStrongRef();
+      if (!display) {
+        display = QSharedPointer<DisplayHandle>::create(
+            resource, identity,
+            QSize(int(image->width.to_primitive()),
+                  int(image->height.to_primitive())),
+            info);
+        sweep_displays(*locked);
+        if (!locked->displays.contains(name))
+          locked->displaySweep.append(name);
+        locked->displays.insert(name, display.toWeakRef());
+      }
+      display->retain_source(resource);
+      identity = display->identity;
+    }
     if (locked->limit == usize())
       return;
     auto index = locked->entries.len();
@@ -311,6 +387,7 @@ struct Service {
     if (frameIndex < entry.frames.len()) {
       *image = copy(entry.frames[frameIndex].image);
       identity = entry.frames[frameIndex].identity;
+      display = entry.frames[frameIndex].display;
       return;
     }
     if (frameIndex != entry.frames.len())
@@ -342,7 +419,7 @@ struct Service {
       block(locked->entries[*oldest]);
       locked->entries[*oldest].blocked = false;
     }
-    entry.frames.push(DisplayResult{copy(*image), identity});
+    entry.frames.push(DisplayResult{copy(*image), identity, display});
     entry.bytes += bytes;
     locked->bytes += bytes;
     entry.info = info;
@@ -431,9 +508,13 @@ struct Service {
     if (state->cache && !state->cancellation.cancelled()) {
       auto hit = cached(state->key, index, info, eof);
       if (hit.is_some()) {
+        if (hit->display) {
+          auto resource = state->resource.lock().unwrap_unchecked();
+          hit->display->retain_source(*resource);
+        }
         auto owner = Arc<Frame>::try_make(
             rstd::move(hit->image), counts.clone(),
-            info.animated ? 0 : hit->identity, !info.animated);
+            info.animated ? 0 : hit->identity, !info.animated, hit->display);
         if (owner.is_err())
           error = Some(wi::Error::ResourceLimit);
         else
@@ -483,20 +564,27 @@ struct Service {
             eof = true;
             if (state->cache) {
               quint64 unused{};
-              remember(state->key, nullptr, session->info(), unused);
+              QSharedPointer<DisplayHandle> display;
+              auto resource = state->resource.lock().unwrap_unchecked();
+              remember(state->key, nullptr, session->info(), unused, *resource,
+                       display);
             }
             break;
           }
           quint64 identity =
               counts->nextDisplay.fetch_add(u64(1), Ordering::Relaxed)
                   .to_primitive();
-          if (state->cache)
-            remember(state->key, &*value, session->info(), identity);
+          QSharedPointer<DisplayHandle> display;
+          if (state->cache) {
+            auto resource = state->resource.lock().unwrap_unchecked();
+            remember(state->key, &*value, session->info(), identity, *resource,
+                     display);
+          }
           if (sessionNext == index) {
-            auto owner =
-                Arc<Frame>::try_make(value.unwrap_unchecked(), counts.clone(),
-                                     session->info().animated ? 0 : identity,
-                                     state->cache && !session->info().animated);
+            auto owner = Arc<Frame>::try_make(
+                value.unwrap_unchecked(), counts.clone(),
+                session->info().animated ? 0 : identity,
+                state->cache && !session->info().animated, display);
             if (owner.is_err())
               error = Some(wi::Error::ResourceLimit);
             else
@@ -588,17 +676,33 @@ public:
     return create(rstd::move(path), None(), size, animation, false, context,
                   initialFrame, rstd::move(root));
   }
-  static auto open_source(QString identity, wi::Source input,
-                          wi::DecodeRequest size, bool animation = false,
-                          bool cache = true, quint64 context = 0,
-                          int initialFrame = 0) -> Result<Request, wi::Error> {
+  static auto
+  open_source(QString identity, wi::Source input, wi::DecodeRequest size,
+              bool animation = false, bool cache = true, quint64 context = 0,
+              int initialFrame = 0, ncq::ResourceSnapshot resource = {})
+      -> Result<Request, wi::Error> {
     return create(rstd::move(identity), Some(rstd::move(input)), size,
-                  animation, cache, context, initialFrame);
+                  animation, cache, context, initialFrame, {},
+                  rstd::move(resource));
   }
 
+  static auto cached_display(const ncq::ResourceSnapshot &source,
+                             wi::DecodeRequest size, quint64 context = 0,
+                             int initialFrame = 0)
+      -> QSharedPointer<DisplayHandle> {
+    if (initialFrame != 0)
+      return {};
+    auto handle = service().display(
+        Service::key(source.identity(), size, context, 0, true));
+    if (handle)
+      handle->retain_source(source);
+    return handle;
+  }
   static auto cached_source(QString identity, wi::DecodeRequest size,
                             bool animation = false, quint64 context = 0,
-                            int initialFrame = 0) -> Option<Request> {
+                            int initialFrame = 0,
+                            ncq::ResourceSnapshot resource = {})
+      -> Option<Request> {
     auto &s = service();
     auto key = Service::key(identity, size, context, initialFrame, true);
     wi::ImageInfo info;
@@ -606,6 +710,8 @@ public:
     auto image = s.cached(key, initialFrame, info, eof);
     if (!image || info.animated)
       return None();
+    if (image->display && !resource.identity().isEmpty())
+      image->display->retain_source(rstd::move(resource));
     auto cancellation = wi::Cancellation::make();
     if (cancellation.is_err())
       return None();
@@ -615,8 +721,9 @@ public:
     if (state.is_err())
       return None();
     s.counts->payloads.fetch_add(usize(1), Ordering::Relaxed);
-    auto frame = Arc<Frame>::try_make(rstd::move(image->image),
-                                      s.counts.clone(), image->identity, true);
+    auto frame =
+        Arc<Frame>::try_make(rstd::move(image->image), s.counts.clone(),
+                             image->identity, true, image->display);
     if (frame.is_err()) {
       s.counts->payloads.fetch_sub(usize(1), Ordering::Relaxed);
       return None();
@@ -634,7 +741,8 @@ public:
 private:
   static auto create(QString path, Option<wi::Source> input,
                      wi::DecodeRequest size, bool animation, bool cache,
-                     quint64 context, int initialFrame, QString root = {})
+                     quint64 context, int initialFrame, QString root = {},
+                     ncq::ResourceSnapshot resource = {})
       -> Result<Request, wi::Error> {
     auto &s = service();
     auto key = Service::key(path, size, context, initialFrame, input.is_some());
@@ -652,6 +760,13 @@ private:
           if (state->subscribers.compare_exchange_weak(count, count + usize(1),
                                                        Ordering::AcqRel,
                                                        Ordering::Relaxed)) {
+            if (!resource.identity().isEmpty()) {
+              auto prior = state->resource.lock().unwrap_unchecked();
+              if (resource.revision() > prior->revision())
+                *prior = resource;
+              if (auto display = s.display(key))
+                display->retain_source(*prior);
+            }
             state->activeSubscribers.fetch_add(usize(1), Ordering::AcqRel);
             state->visibleSubscribers.fetch_add(usize(1), Ordering::AcqRel);
             return Ok(Request(rstd::move(state)));
@@ -665,9 +780,10 @@ private:
     if (cancellation.is_err()) {
       return Err(wi::Error::ResourceLimit);
     }
-    auto state = Arc<State>::try_make(
-        rstd::move(path), rstd::move(input), rstd::move(key), animation, cache,
-        size, cancellation.unwrap_unchecked(), rstd::move(root));
+    auto state = Arc<State>::try_make(rstd::move(path), rstd::move(input),
+                                      rstd::move(key), animation, cache, size,
+                                      cancellation.unwrap_unchecked(),
+                                      rstd::move(root), rstd::move(resource));
     if (state.is_err()) {
       return Err(wi::Error::ResourceLimit);
     }

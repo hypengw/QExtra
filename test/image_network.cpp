@@ -1,5 +1,6 @@
 #include "QExtra/image.hpp"
 #include "tests.hpp"
+#include <memory>
 #include <rstd/macro.hpp>
 import rstd;
 import qextra;
@@ -174,6 +175,83 @@ void test_production_cache(const QUrl &first, const QUrl &second,
              "response exclusions passed";
 }
 
+void test_all_origins_cache(const QUrl &first, const QUrl &second,
+                            QHash<QByteArray, int> &hits) {
+  Factory factory;
+  QQmlEngine engine;
+  engine.setNetworkAccessManagerFactory(&factory);
+  rstd_assert(qextra::image::set_network_cache(&engine, {first}, 300));
+  QQmlComponent component(&engine);
+  component.setData(R"(
+import QtQuick
+import QtQuick.Window
+import QExtra as QE
+Window {
+  visible: true; width: 64; height: 64
+  QE.Image { objectName: "image"; anchors.fill: parent }
+})",
+                    QUrl("qrc:/all-origins-cache.qml"));
+  std::unique_ptr<QObject> root(component.create());
+  rstd_assert(root);
+  auto *image = root->findChild<qextra::Image *>("image");
+  rstd_assert(image);
+  auto *resources = ncrequest::client::qt_network::ResourceCache::get(
+      engine.networkAccessManager());
+  rstd_assert(resources && factory.manager);
+  auto load = [&](const QUrl &url) {
+    image->setSource(QUrl());
+    image->setSource(url);
+    rstd_assert(
+        wait_for([&] { return image->status() == qextra::Image::Ready; }));
+  };
+  auto fresh = [&](const QUrl &url) {
+    return resources->acquire(QNetworkRequest(url)).snapshot().fresh();
+  };
+  const auto allowed = first.resolved(QUrl("/all-origins-restricted-first"));
+  const auto excluded = second.resolved(QUrl("/all-origins-restricted-second"));
+  load(allowed);
+  rstd_assert(fresh(allowed));
+  load(excluded);
+  rstd_assert(!fresh(excluded));
+  image->setSource(QUrl());
+  rstd_assert(qextra::image::set_network_cache(&engine, {}, 300, true));
+  QCoreApplication::sendPostedEvents(image, QEvent::MetaCall);
+  const QUrl urls[] = {first.resolved(QUrl("/all-origins-first")),
+                       second.resolved(QUrl("/all-origins-second")),
+                       second.resolved(QUrl("/all-origins-fallback"))};
+  const QByteArray paths[] = {"/all-origins-first", "/all-origins-second",
+                              "/all-origins-fallback"};
+  for (int i = 0; i < 3; ++i) {
+    load(urls[i]);
+    rstd_assert(fresh(urls[i]) && hits[paths[i]] == 1);
+    const auto requests = factory.manager->requests;
+    const auto bytes = qextra::image::network_statistics(&engine).bytes;
+    const auto decoded = qextra::image::service_statistics().decoded;
+    load(urls[i]);
+    rstd_assert(factory.manager->requests == requests && hits[paths[i]] == 1);
+    rstd_assert(qextra::image::network_statistics(&engine).bytes == bytes);
+    rstd_assert(qextra::image::service_statistics().decoded == decoded);
+  }
+  for (const auto &path : {QByteArray("/all-origins-no-store"),
+                           QByteArray("/all-origins-no-cache")}) {
+    const auto url = second.resolved(QUrl(QString::fromLatin1(path)));
+    for (int request = 0; request < 2; ++request) {
+      load(url);
+      rstd_assert(!fresh(url) && hits[path] == request + 1);
+    }
+  }
+  image->setSource(QUrl());
+  qextra::image::clear_network_cache(&engine);
+  QCoreApplication::sendPostedEvents(image, QEvent::MetaCall);
+  for (int i = 0; i < 3; ++i) {
+    rstd_assert(!fresh(urls[i]));
+    load(urls[i]);
+    rstd_assert(fresh(urls[i]) && hits[paths[i]] == 2);
+  }
+  qInfo()
+      << "Image all origins, fallback, response directives and clear passed";
+}
+
 void test_queue() {
   ControlledFactory first, second;
   auto *engine = new QQmlEngine;
@@ -330,6 +408,351 @@ void test_queue_priority_fifo() {
 }
 } // namespace
 
+namespace {
+void test_gpu_cache(const QUrl &base, QHash<QByteArray, int> &hits,
+                    bool &blue) {
+  Factory factory;
+  QQmlEngine engine;
+  engine.setNetworkAccessManagerFactory(&factory);
+  rstd_assert(qextra::image::set_network_cache(&engine, {base}, 300));
+  auto *resources = ncrequest::client::qt_network::ResourceCache::get(
+      engine.networkAccessManager());
+  rstd_assert(resources);
+  ncrequest::client::qt_network::ResourceOptions options;
+  options.origins = {base};
+  options.fallback_seconds = 300;
+  options.maximum_entries = 2;
+  resources->configure(options);
+  qextra::image::set_cache_limit(usize());
+  QQmlComponent component(&engine);
+  component.setData(R"(
+import QtQuick
+import QtQuick.Window
+import QExtra as QE
+Window {
+  visible: true; width: 64; height: 64; color: "blue"
+  Item {
+    id: scope; anchors.fill: parent; clip: true
+    QE.Image {
+      objectName: "display"; width: 64; height: 64
+      preparationScope: scope
+      frameDataRequired: false
+    }
+  }
+})",
+                    QUrl("qrc:/gpu-cache.qml"));
+  std::unique_ptr<QObject> root(component.create());
+  rstd_assert(root);
+  auto *window = qobject_cast<QQuickWindow *>(root.get());
+  auto *image = root->findChild<qextra::Image *>("display");
+  rstd_assert(window && image);
+  rstd_assert(qextra::image::set_texture_cache_limit(window, 1024 * 1024));
+  const auto url = base.resolved(QUrl("/gpu-cached"));
+  auto texture = [&] { return qextra::image::texture_statistics(window); };
+  auto ready = [&] {
+    if (image->status() != qextra::Image::Ready)
+      return false;
+    const auto pixels = image->window()->grabWindow();
+    if (pixels.isNull())
+      return false;
+    const auto color =
+        pixels.pixelColor(pixels.width() / 2, pixels.height() / 2);
+    return image->hasFrame() && color.red() > 240 && color.blue() < 10;
+  };
+  auto idle = [&] {
+    image->setSource(QUrl());
+    rstd_assert(wait_for([&] {
+      window->grabWindow();
+      return texture().active_bytes == 0 && texture().idle_bytes > 0;
+    }));
+    rstd_assert(!image->hasFrame());
+  };
+  int frames{};
+  QObject::connect(image, &qextra::Image::frameReady, image,
+                   [&](const QUrl &, const QImage &pixels) {
+                     rstd_assert(!pixels.isNull());
+                     ++frames;
+                   });
+  image->setSource(url);
+  rstd_assert(wait_for(ready));
+  rstd_assert(image->intrinsicSize() == QSize(1, 1));
+  idle();
+  const auto initialFrames = frames;
+  const auto decoded = qextra::image::service_statistics().decoded;
+  const auto network = qextra::image::network_statistics(&engine);
+  const auto uploaded = texture().uploads;
+  const auto allocated = texture().allocations;
+  const auto requests = factory.manager->requests;
+  const auto wire = hits["/gpu-cached"];
+  QElapsedTimer warmTime;
+  warmTime.start();
+  image->setSource(url);
+  rstd_assert(wait_for(ready));
+  qInfo()
+      << "GPU-only warm first-frame ms" << warmTime.elapsed() << "Qt requests"
+      << factory.manager->requests - requests << "wire requests"
+      << hits["/gpu-cached"] - wire << "body bytes"
+      << qextra::image::network_statistics(&engine).bytes - network.bytes
+      << "decoded"
+      << (qextra::image::service_statistics().decoded - decoded).to_primitive()
+      << "uploads" << texture().uploads - uploaded << "allocations"
+      << texture().allocations - allocated;
+  rstd_assert(qextra::image::service_statistics().cache_bytes == usize());
+  rstd_assert(qextra::image::service_statistics().decoded == decoded);
+  rstd_assert(factory.manager->requests == requests &&
+              hits["/gpu-cached"] == wire);
+  rstd_assert(qextra::image::network_statistics(&engine).bytes ==
+              network.bytes);
+  rstd_assert(texture().uploads == uploaded &&
+              texture().allocations == allocated);
+  rstd_assert(frames == initialFrames);
+  idle();
+  for (int i = 0; i < 4; ++i) {
+    qextra::image::NetworkLoad load(
+        &engine, base.resolved(QUrl(QStringLiteral("/gpu-other-%1").arg(i))),
+        nullptr);
+    rstd_assert(wait_for([&] { return load.done(); }));
+    rstd_assert(load.error().isEmpty() && load.take_source().is_ok());
+  }
+  rstd_assert(resources->statistics().index_evictions > 0);
+  auto opened = factory.manager->requests;
+  image->setX(128);
+  image->setLoadingMode(qextra::Image::Prefetch);
+  image->setSource(url);
+  QCoreApplication::sendPostedEvents(image, QEvent::MetaCall);
+  window->grabWindow();
+  rstd_assert(image->status() == qextra::Image::Loading && !image->hasFrame());
+  rstd_assert(factory.manager->requests == opened);
+  image->setX(0);
+  image->setLoadingMode(qextra::Image::Automatic);
+  rstd_assert(wait_for(ready));
+  rstd_assert(factory.manager->requests == opened);
+  rstd_assert(qextra::image::service_statistics().decoded == decoded);
+  rstd_assert(texture().uploads == uploaded &&
+              texture().allocations == allocated);
+  rstd_assert(resources->statistics().retained_hits > 0);
+
+  idle();
+  image->resetWidth();
+  image->resetHeight();
+  rstd_assert(image->size().isEmpty());
+  image->setSource(url);
+  rstd_assert(wait_for([&] {
+    const auto pixels = window->grabWindow();
+    return image->status() == qextra::Image::Ready && image->hasFrame() &&
+           image->size() == QSizeF(1, 1) && !pixels.isNull() &&
+           pixels.pixelColor(0, 0).red() > 240;
+  }));
+  rstd_assert(factory.manager->requests == opened);
+  rstd_assert(qextra::image::service_statistics().decoded == decoded);
+  image->setWidth(64);
+  image->setHeight(64);
+
+  // CPU consumers explicitly request frame data even when a texture is
+  // resident.
+  idle();
+  image->setSource(url);
+  QCoreApplication::sendPostedEvents(image, QEvent::MetaCall);
+  image->setFrameDataRequired(true);
+  rstd_assert(wait_for([&] { return ready() && frames > initialFrames; }));
+  rstd_assert(factory.manager->requests == opened + 1);
+  rstd_assert(hits["/gpu-cached"] == wire);
+  rstd_assert(qextra::image::service_statistics().decoded ==
+              decoded + usize(1));
+  rstd_assert(texture().uploads == uploaded);
+  idle();
+  image->setFrameDataRequired(false);
+  qextra::image::trim_texture_cache(window);
+  rstd_assert(wait_for([&] {
+    window->grabWindow();
+    return texture().idle_bytes == 0;
+  }));
+  const auto beforeMiss = qextra::image::service_statistics().decoded;
+  image->setSource(url);
+  rstd_assert(wait_for(ready));
+  rstd_assert(qextra::image::service_statistics().decoded ==
+              beforeMiss + usize(1));
+  rstd_assert(texture().uploads == uploaded + 1);
+  idle();
+
+  // A successful validation must keep the replacement source record alive.
+  image->setFrameDataRequired(true);
+  const auto validated = base.resolved(QUrl("/gpu-validated"));
+  image->setSource(validated);
+  rstd_assert(wait_for(ready));
+  idle();
+  image->setSource(validated);
+  rstd_assert(wait_for(ready));
+  rstd_assert(hits["/gpu-validated"] == 2);
+  idle();
+  image->setFrameDataRequired(false);
+  for (int i = 4; i < 8; ++i) {
+    qextra::image::NetworkLoad load(
+        &engine, base.resolved(QUrl(QStringLiteral("/gpu-other-%1").arg(i))),
+        nullptr);
+    rstd_assert(wait_for([&] { return load.done(); }));
+    rstd_assert(load.error().isEmpty() && load.take_source().is_ok());
+  }
+  opened = factory.manager->requests;
+  const auto renewedDecoded = qextra::image::service_statistics().decoded;
+  const auto renewedUploads = texture().uploads;
+  image->setSource(validated);
+  rstd_assert(wait_for(ready));
+  rstd_assert(factory.manager->requests == opened &&
+              hits["/gpu-validated"] == 2);
+  rstd_assert(qextra::image::service_statistics().decoded == renewedDecoded);
+  rstd_assert(texture().uploads == renewedUploads);
+  qInfo() << "GPU-only validated/evicted deltas"
+          << factory.manager->requests - opened
+          << (qextra::image::service_statistics().decoded - renewedDecoded)
+                 .to_primitive()
+          << texture().uploads - renewedUploads;
+
+  image->setSource(QUrl());
+  qextra::image::trim_texture_cache(window);
+  rstd_assert(wait_for([&] {
+    window->grabWindow();
+    return texture().idle_bytes == 0 && texture().active_bytes == 0;
+  }));
+  QSharedPointer<qextra::image::DisplayHandle> sharedDisplay;
+  quint64 sharedRevision{};
+  const auto sharedUrl = base.resolved(QUrl("/gpu-shared-validated"));
+  {
+    qextra::image::NetworkLoad first(&engine, sharedUrl, nullptr);
+    rstd_assert(wait_for([&] { return first.done(); }));
+    auto oldSource = first.snapshot();
+    auto firstInput = first.take_source().unwrap();
+    auto firstRequest = qextra::image::Request::open_source(
+                            oldSource.identity(), firstInput.clone(), {}, false,
+                            true, 999, 0, oldSource)
+                            .unwrap();
+    qextra::image::NetworkLoad second(&engine, sharedUrl, nullptr);
+    rstd_assert(wait_for([&] { return second.done(); }));
+    auto newSource = second.snapshot();
+    sharedRevision = newSource.revision();
+    rstd_assert(newSource.identity() == oldSource.identity() &&
+                newSource.revision() > oldSource.revision());
+    auto secondRequest =
+        qextra::image::Request::open_source(newSource.identity(),
+                                            second.take_source().unwrap(), {},
+                                            false, true, 999, 0, newSource)
+            .unwrap();
+    auto lateOldRequest = qextra::image::Request::open_source(
+                              oldSource.identity(), rstd::move(firstInput), {},
+                              false, true, 999, 0, oldSource)
+                              .unwrap();
+    rstd_assert(firstRequest.same_resource(secondRequest) &&
+                firstRequest.same_resource(lateOldRequest));
+    rstd_assert(firstRequest.advance());
+    rstd_assert(wait_for([&] {
+      auto frame = firstRequest.poll().frame;
+      if (!frame)
+        return false;
+      sharedDisplay = (*frame)->display;
+      return bool(sharedDisplay);
+    }));
+    sharedDisplay->retain_source(oldSource);
+  }
+  for (int i = 8; i < 12; ++i) {
+    qextra::image::NetworkLoad load(
+        &engine, base.resolved(QUrl(QStringLiteral("/gpu-other-%1").arg(i))),
+        nullptr);
+    rstd_assert(wait_for([&] { return load.done(); }));
+    rstd_assert(load.error().isEmpty() && load.take_source().is_ok());
+  }
+  auto retained = resources->acquire(QNetworkRequest(sharedUrl));
+  rstd_assert(retained.snapshot().fresh() &&
+              retained.snapshot().revision() == sharedRevision);
+  sharedDisplay.clear();
+
+  image->setSource(QUrl());
+  image->setSource(url);
+  rstd_assert(wait_for(ready));
+  idle();
+  image->setSource(url);
+  rstd_assert(wait_for(ready));
+  const auto priorContext = texture();
+  if (qEnvironmentVariable("QSG_RENDER_LOOP") == QLatin1String("basic")) {
+    auto *parent = image->parentItem();
+    QQuickWindow next;
+    next.resize(64, 64);
+    next.setColor(Qt::blue);
+    rstd_assert(qextra::image::set_texture_cache_limit(&next, 1024 * 1024));
+    next.show();
+    image->setParentItem(next.contentItem());
+    rstd_assert(wait_for(ready));
+    const auto moved = qextra::image::texture_statistics(&next);
+    rstd_assert(image->window() == &next && moved.allocations == 1 &&
+                moved.uploads == 1);
+    image->setParentItem(parent);
+    rstd_assert(wait_for(ready));
+    rstd_assert(image->window() == window);
+    qInfo() << "GPU-only window restore allocations" << moved.allocations
+            << "uploads" << moved.uploads;
+  } else {
+    window->setPersistentSceneGraph(false);
+    window->setPersistentGraphics(false);
+    window->hide();
+    window->releaseResources();
+    rstd_assert(wait_for(
+        [&] { return texture().generation > priorContext.generation; }));
+    window->show();
+    rstd_assert(wait_for(ready));
+    const auto restored = texture();
+    rstd_assert(restored.generation > priorContext.generation);
+    rstd_assert(restored.uploads > priorContext.uploads);
+    qInfo() << "GPU-only context restore generation" << priorContext.generation
+            << restored.generation << "uploads" << priorContext.uploads
+            << restored.uploads;
+  }
+
+  blue = false;
+  const auto changing = base.resolved(QUrl("/gpu-changing"));
+  image->setSource(changing);
+  rstd_assert(wait_for(ready));
+  idle();
+  image->setSource(changing);
+  rstd_assert(wait_for(ready));
+  const auto beforeClear = texture();
+  const auto beforeClearRequests = hits["/gpu-changing"];
+  blue = true;
+  qextra::image::clear_network_cache(&engine);
+  rstd_assert(wait_for([&] {
+    const auto pixels = window->grabWindow();
+    return image->status() == qextra::Image::Ready && image->hasFrame() &&
+           !pixels.isNull() &&
+           pixels.pixelColor(pixels.width() / 2, pixels.height() / 2).blue() >
+               240 &&
+           texture().uploads > beforeClear.uploads;
+  }));
+  rstd_assert(hits["/gpu-changing"] == beforeClearRequests + 1);
+  blue = false;
+
+  image->setSource(QUrl());
+  qextra::image::trim_texture_cache(window);
+  rstd_assert(wait_for([&] {
+    window->grabWindow();
+    return texture().idle_bytes == 0 && texture().active_bytes == 0;
+  }));
+  const auto noStore = base.resolved(QUrl("/gpu-no-store"));
+  image->setSource(noStore);
+  rstd_assert(wait_for(ready));
+  image->setSource(QUrl());
+  rstd_assert(wait_for([&] {
+    window->grabWindow();
+    return texture().idle_bytes == 0 && texture().active_bytes == 0;
+  }));
+  const auto noStoreRequests = hits["/gpu-no-store"];
+  image->setSource(noStore);
+  rstd_assert(wait_for(ready));
+  rstd_assert(hits["/gpu-no-store"] == noStoreRequests + 1);
+  root.reset();
+  qextra::image::set_cache_limit(usize(16 * 1024 * 1024));
+  qInfo() << "GPU-only HTTP cache, metadata eviction, prefetch and pixel "
+             "demand passed";
+}
+} // namespace
+
 int run_image_network(int argc, char **argv) {
   QGuiApplication app(argc, argv);
   test_queue();
@@ -380,7 +803,8 @@ int run_image_network(int argc, char **argv) {
         socket->setProperty("handled", true);
         const auto path = request.split(' ').value(1);
         ++hits[path];
-        if (path == "/validated" &&
+        if ((path == "/validated" || path == "/gpu-validated" ||
+             path == "/gpu-shared-validated") &&
             request.contains("If-None-Match: \"image-1\"")) {
           socket->write("HTTP/1.1 304 Not Modified\r\nETag: "
                         "\"image-1\"\r\nCache-Control: public, "
@@ -391,8 +815,9 @@ int run_image_network(int argc, char **argv) {
         if (path == "/slow")
           return;
         QByteArray body("P6\n1 1\n255\n");
-        body += path == "/changing" && blue ? QByteArray::fromHex("0000ff")
-                                            : QByteArray::fromHex("ff0000");
+        body += (path == "/changing" || path == "/gpu-changing") && blue
+                    ? QByteArray::fromHex("0000ff")
+                    : QByteArray::fromHex("ff0000");
         QByteArray status("200 OK"), extra;
         if (path.startsWith("/file") || path == "/production-file" ||
             path == "/outside" || path == "/escape") {
@@ -482,14 +907,20 @@ int run_image_network(int argc, char **argv) {
                           chunk + "\r\n");
           socket->write("0\r\n\r\n");
         } else {
-          if (path == "/validated")
+          if (path == "/all-origins-no-cache")
+            extra += "Cache-Control: no-cache, max-age=3600\r\n";
+          else if (path == "/validated" || path == "/gpu-validated" ||
+                   path == "/gpu-shared-validated")
             extra += "ETag: \"image-1\"\r\nCache-Control: no-cache\r\n";
-          else if (path != "/fallback")
-            extra += path == "/cached" ||
-                             path.startsWith("/production-cached-") ||
-                             path == "/production-file"
-                         ? "Cache-Control: public, max-age=3600\r\n"
-                         : "Cache-Control: no-store\r\n";
+          else if (path != "/fallback" && path != "/all-origins-fallback")
+            extra +=
+                path == "/cached" || path.startsWith("/production-cached-") ||
+                        (path.startsWith("/gpu-") && path != "/gpu-no-store") ||
+                        (path.startsWith("/all-origins-") &&
+                         path != "/all-origins-no-store") ||
+                        path == "/production-file"
+                    ? "Cache-Control: public, max-age=3600\r\n"
+                    : "Cache-Control: no-store\r\n";
           socket->write("HTTP/1.1 " + status + "\r\n" + extra +
                         "Content-Length: " + QByteArray::number(body.size()) +
                         "\r\nConnection: close\r\n\r\n" + body);
@@ -507,6 +938,12 @@ int run_image_network(int argc, char **argv) {
       QUrl(
           QStringLiteral("http://127.0.0.1:%1").arg(secondServer.serverPort())),
       hits);
+  test_all_origins_cache(
+      url(""),
+      QUrl(
+          QStringLiteral("http://127.0.0.1:%1").arg(secondServer.serverPort())),
+      hits);
+  test_gpu_cache(url(""), hits, blue);
   Factory factory;
   auto *engine = new QQmlEngine;
   engine->setNetworkAccessManagerFactory(&factory);

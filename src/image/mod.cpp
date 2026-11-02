@@ -6,6 +6,7 @@ import :image;
 import :image.texture;
 import qextra.qt;
 import rstd;
+import ncrequest;
 
 using namespace rstd::prelude;
 using rstd::sync::Arc;
@@ -46,6 +47,34 @@ QVariantMap ImageCache::textureStatistics(QQuickWindow *window) const {
           {"pendingReleaseBytes", s.pending_release_bytes},
           {"limit", s.limit},
           {"generation", s.generation}};
+}
+
+QVariantMap ImageCache::networkStatistics() const {
+  auto *engine = qmlEngine(this);
+  if (!engine)
+    return {};
+  const auto s = image::network_statistics(engine);
+  return {{"requests", s.requests},
+          {"bytes", s.bytes},
+          {"acquisitions", s.resources.acquisitions},
+          {"metadataHits", s.resources.metadata_hits},
+          {"retainedHits", s.resources.retained_hits},
+          {"freshHits", s.resources.fresh_hits},
+          {"indexEvictions", s.resources.index_evictions},
+          {"resourceOpened", s.resources.opened},
+          {"qtCacheResults", s.resources.cache_results},
+          {"indexedEntries", qlonglong(s.resources.indexed_entries)},
+          {"liveEntries", qlonglong(s.resources.live_entries)}};
+}
+QVariantMap ImageCache::decodeStatistics() const {
+  const auto s = image::service_statistics();
+  return {{"running", qulonglong(s.running.to_primitive())},
+          {"waiting", qulonglong(s.waiting.to_primitive())},
+          {"decoded", qulonglong(s.decoded.to_primitive())},
+          {"opened", qulonglong(s.opened.to_primitive())},
+          {"cacheHits", qulonglong(s.cache_hits.to_primitive())},
+          {"cacheBytes", qulonglong(s.cache_bytes.to_primitive())},
+          {"cacheLimit", qulonglong(s.cache_limit.to_primitive())}};
 }
 
 static qreal now() { return image::playback_time(); }
@@ -115,6 +144,8 @@ public:
   QUrl source;
   QUrl networkUrl;
   image::NetworkLoad *download{};
+  Option<image::NetworkSelection> networkSelection;
+  ncrequest::client::qt_network::ResourceSnapshot networkSnapshot;
   Option<wi::Source> networkInput;
   QString networkIdentity;
   bool networkCacheable{};
@@ -130,7 +161,7 @@ public:
   Qt::Alignment horizontal{Qt::AlignHCenter};
   Qt::Alignment vertical{Qt::AlignVCenter};
   bool mirror{}, mipmap{}, retain{}, animated{}, playing{true}, paused{},
-      cache{true};
+      cache{true}, frameDataRequired{true};
   quint64 contextId{}, generation{};
   bool awaiting{}, rewind{}, needsFrame{}, suspended{}, ended{};
   int frame{}, frameCount{}, seekFrame{}, loops{-1}, iteration{};
@@ -145,6 +176,9 @@ public:
   QList<QMetaObject::Connection> scopeConnections;
   QImage pending;
   quint64 displayId{};
+  QSharedPointer<image::DisplayHandle> display, displayProbe;
+  bool displayAttempted{}, displayProbeSent{}, displayProbeHit{};
+  quint64 displayProbeToken{};
   bool textureRetained{};
   QSharedPointer<TextureState> textures;
   ImageProvider *provider{};
@@ -214,6 +248,7 @@ public:
   void clearFrame() {
     pending = {};
     pixels = {};
+    display = {};
   }
   void state(Image::Status value, QString message = {}) {
     if (status == value && error == message) {
@@ -242,6 +277,9 @@ public:
     networkUrl = QUrl();
     networkInput = None();
     networkIdentity.clear();
+    networkSnapshot = {};
+    networkSelection = None();
+    displayProbe = {};
     request = None();
     playback = None();
     candidate = None();
@@ -294,6 +332,10 @@ public:
   }
   void cancelRequest(bool keepImage = false) {
     ++generation;
+    networkSelection = None();
+    displayProbe = {};
+    ++displayProbeToken;
+    displayAttempted = displayProbeSent = displayProbeHit = false;
     delete download;
     download = nullptr;
     networkUrl = QUrl();
@@ -362,6 +404,7 @@ public:
           networkInput = None();
           networkFile = None();
           networkIdentity.clear();
+          networkSnapshot = {};
           reload(true);
         });
       }
@@ -396,6 +439,20 @@ public:
     if (!guard || guard->d->generation != before)
       return;
     if (!networkUrl.isEmpty()) {
+      if (cache && !frameDataRequired && !animated &&
+          (item->width() <= 0 || item->height() <= 0)) {
+        if (auto *engine = qmlEngine(item)) {
+          networkSelection = Some(image::NetworkSelection(engine, networkUrl));
+          auto geometry =
+              networkSelection->display(decodeSize(), contextId, seekFrame);
+          if (geometry) {
+            item->setImplicitSize(geometry->size.width() / dpr,
+                                  geometry->size.height() / dpr);
+            if (!guard || guard->d->generation != before)
+              return;
+          }
+        }
+      }
       if (networkFile) {
         networkUrl = QUrl();
         start(image::Request::open_file(networkFile->path, networkFile->root,
@@ -407,7 +464,7 @@ public:
         networkUrl = QUrl();
         start(image::Request::open_source(
             networkIdentity, networkInput->clone(), decodeSize(), animated,
-            cache && networkCacheable, contextId, seekFrame));
+            cache && networkCacheable, contextId, seekFrame, networkSnapshot));
         return;
       }
       wake();
@@ -423,6 +480,8 @@ public:
             u32(qMax(0, maximum.width())), u32(qMax(0, maximum.height()))};
   }
   void start(Result<image::Request, wi::Error> opened) {
+    QPointer<Image> guard(item);
+    const auto before = generation;
     if (opened.is_err()) {
       fail(QStringLiteral("Image request limit reached"));
       return;
@@ -442,8 +501,18 @@ public:
       request->set_prefetch(!active());
       request->observe(item, "imageReady");
     }
-    wake();
     state(Image::Loading);
+    if (!guard || guard->d->generation != before)
+      return;
+    if (request && !animated) {
+      auto ready = request->poll();
+      if (ready.frame) {
+        if (publishInfo(ready.info))
+          publish(ready.frame.take().unwrap_unchecked());
+        return;
+      }
+    }
+    wake();
   }
   void publish(Arc<image::Frame> frameOwner,
                Option<qreal> sharedRemaining = {}) {
@@ -452,6 +521,7 @@ public:
     auto valid = [&] { return guard && guard->d->generation == before; };
     const auto oldSourceSize = item->sourceSize();
     displayId = frameOwner->displayId;
+    display = frameOwner->display;
     textureRetained = frameOwner->cacheable;
     const auto &value = frameOwner->image;
     const auto *bytes = value.pixels.data();
@@ -537,6 +607,12 @@ public:
   void tick() {
     stopClock();
     if (invalidated.exchange(false, rstd::sync::atomic::Ordering::AcqRel)) {
+      if (displayProbe) {
+        displayProbe = {};
+        ++displayProbeToken;
+        displayProbeSent = displayProbeHit = false;
+        displayAttempted = false;
+      }
       if (playback) {
         playback->refresh();
       } else if (!needsFrame) {
@@ -571,22 +647,43 @@ public:
       deadline = position() + remaining;
     }
     if (!networkUrl.isEmpty()) {
+      if (displayProbe) {
+        if (active() && !displayProbeSent)
+          item->update();
+        return;
+      }
       if (!download) {
         auto *engine = qmlEngine(item);
         if (!engine) {
           fail(QStringLiteral("Network images require a QML engine"));
           return;
         }
+        if (!networkSelection)
+          networkSelection = Some(image::NetworkSelection(engine, networkUrl));
         if (cache) {
-          auto cached = image::NetworkLoad::cached(
-              engine, networkUrl, decodeSize(), animated, contextId, seekFrame);
+          auto cached = networkSelection->cached(decodeSize(), animated,
+                                                 contextId, seekFrame);
           if (cached) {
+            networkSelection = None();
             networkUrl = QUrl();
             start(Ok(cached.take().unwrap()));
             return;
           }
+          if (!frameDataRequired && !animated && (active() || preparing()) &&
+              !displayAttempted) {
+            displayAttempted = true;
+            displayProbe =
+                networkSelection->display(decodeSize(), contextId, seekFrame);
+            if (displayProbe) {
+              displayProbeSent = displayProbeHit = false;
+              ++displayProbeToken;
+              item->update();
+              return;
+            }
+          }
         }
-        download = new image::NetworkLoad(engine, networkUrl, item);
+        download = new image::NetworkLoad(
+            engine, networkSelection.take().unwrap_unchecked(), item);
         download->set_prefetch(!active());
         if (cache)
           download->cache_target(decodeSize(), animated, contextId, seekFrame);
@@ -620,6 +717,7 @@ public:
                                         seekFrame));
       } else {
         auto identity = download->identity();
+        networkSnapshot = download->snapshot();
         const bool reusable = download->reusable();
         auto input = download->take_source();
         delete download;
@@ -634,7 +732,7 @@ public:
         networkInput = Some(input.unwrap_unchecked());
         start(image::Request::open_source(
             networkIdentity, networkInput->clone(), decodeSize(), animated,
-            cache && reusable, contextId, seekFrame));
+            cache && reusable, contextId, seekFrame, networkSnapshot));
       }
     }
     if (playback) {
@@ -721,11 +819,13 @@ public:
     if (candidate && running && clock)
       clock->schedule(item, deadline);
   }
-  QRectF painted() const {
+  QRectF painted(QSize imageSize = {}) const {
     const qreal w = item->width(), h = item->height();
-    if (pixels.isEmpty())
+    if (imageSize.isEmpty())
+      imageSize = pixels;
+    if (imageSize.isEmpty())
       return {};
-    QSizeF size = QSizeF(pixels) / dpr;
+    QSizeF size = QSizeF(imageSize) / dpr;
     if (fill == Image::Stretch || fill == Image::Tile)
       size = QSizeF(w, h);
     else if (fill == Image::PreserveAspectFit)
@@ -804,6 +904,7 @@ void Image::componentComplete() {
 }
 void Image::geometryChange(const QRectF &rect, const QRectF &old) {
   QQuickItem::geometryChange(rect, old);
+  d->refreshViewport();
   emit paintedGeometryChanged();
   update();
 }
@@ -817,6 +918,56 @@ void Image::itemChange(ItemChange change, const ItemChangeData &value) {
   }
 }
 void Image::imageReady() { d->tick(); }
+void Image::imageDisplayResolved(quint64 generation, bool hit) {
+  if (generation != d->displayProbeToken || !d->displayProbe)
+    return;
+  if (d->invalidated.load(rstd::sync::atomic::Ordering::Acquire)) {
+    d->wake();
+    return;
+  }
+  auto display = d->displayProbe;
+  d->displayProbe = {};
+  d->displayProbeSent = d->displayProbeHit = false;
+  if (hit && (d->frameDataRequired || !d->networkSelection ||
+              !d->networkSelection->snapshot().fresh())) {
+    hit = false;
+    d->networkSelection = None();
+  }
+  if (!hit) {
+    d->wake();
+    return;
+  }
+  QPointer<Image> guard(this);
+  const auto requestGeneration = d->generation;
+  const auto valid = [&] {
+    return guard && d->generation == requestGeneration;
+  };
+  if (!d->publishInfo(display->info) || !valid())
+    return;
+  const auto oldSourceSize = sourceSize();
+  d->display = display;
+  d->displayId = display->identity;
+  d->textureRetained = true;
+  d->pixels = display->size;
+  d->pending = {};
+  d->networkUrl = QUrl();
+  d->needsFrame = false;
+  if (sourceSize() != oldSourceSize) {
+    emit sourceSizeChanged();
+    if (!valid())
+      return;
+  }
+  setImplicitSize(display->size.width() / d->dpr,
+                  display->size.height() / d->dpr);
+  if (!valid())
+    return;
+  d->state(Ready);
+  if (!valid())
+    return;
+  emit paintedGeometryChanged();
+  if (valid())
+    update();
+}
 void Image::imageTextureFailed(quint64 generation) {
   if (generation != d->generation)
     return;
@@ -848,6 +999,12 @@ QSGTextureProvider *Image::textureProvider() const {
 }
 QSGNode *Image::updatePaintNode(QSGNode *old, UpdatePaintNodeData *) {
   auto *node = static_cast<QSGImageNode *>(old);
+  if (d->invalidated.load(rstd::sync::atomic::Ordering::Acquire)) {
+    delete node;
+    QMetaObject::invokeMethod(
+        this, [this] { d->wake(); }, Qt::QueuedConnection);
+    return nullptr;
+  }
   if (d->loadingMode == Suspended ||
       (d->loadingMode == Prefetch && !d->inViewport)) {
     delete node;
@@ -863,7 +1020,28 @@ QSGNode *Image::updatePaintNode(QSGNode *old, UpdatePaintNodeData *) {
     }
     return nullptr;
   }
-  if (!d->hasFrame()) {
+  if (d->displayProbe && !d->displayProbeSent) {
+    if (!d->provider)
+      d->provider = new ImageProvider;
+    if (!d->provider->value)
+      d->provider->value = new ImageTexture(d->textures, this);
+    const bool hit = d->provider->value->setDisplay(
+        d->displayProbe, d->mipmap, window()->rhi(), d->generation);
+    d->displayProbeSent = true;
+    d->displayProbeHit = hit;
+    QMetaObject::invokeMethod(
+        this, "imageDisplayResolved", Qt::QueuedConnection,
+        Q_ARG(quint64, d->displayProbeToken), Q_ARG(bool, hit));
+    if (hit)
+      emit d->provider->textureChanged();
+    if (!hit && !d->hasFrame()) {
+      delete node;
+      return nullptr;
+    }
+  }
+  const auto imageSize =
+      d->displayProbe && d->displayProbeHit ? d->displayProbe->size : d->pixels;
+  if (imageSize.isEmpty()) {
     delete node;
     if (d->provider) {
       delete d->provider->value;
@@ -890,10 +1068,10 @@ QSGNode *Image::updatePaintNode(QSGNode *old, UpdatePaintNodeData *) {
   auto *provider = d->provider;
   if (!provider->value)
     provider->value = new ImageTexture(d->textures, this);
-  if (!d->pending.isNull()) {
+  if (!d->pending.isNull() && !d->displayProbeHit) {
     if (!provider->value->setImage(d->pending, d->mipmap, window()->rhi(),
                                    d->displayId, d->textureRetained,
-                                   d->generation)) {
+                                   d->generation, d->display)) {
       QMetaObject::invokeMethod(
           this,
           [this, generation = d->generation] {
@@ -914,9 +1092,9 @@ QSGNode *Image::updatePaintNode(QSGNode *old, UpdatePaintNodeData *) {
     node->setOwnsTexture(false);
   }
   node->setTexture(provider->value);
-  auto painted = d->painted();
+  auto painted = d->painted(imageSize);
   auto visible = painted.intersected(boundingRect());
-  QRectF sourceRect(0, 0, d->pixels.width(), d->pixels.height());
+  QRectF sourceRect(0, 0, imageSize.width(), imageSize.height());
   bool tileX = d->fill == Tile || d->fill == TileHorizontally;
   bool tileY = d->fill == Tile || d->fill == TileVertically;
   provider->value->setHorizontalWrapMode(tileX ? QSGTexture::Repeat
@@ -924,8 +1102,8 @@ QSGNode *Image::updatePaintNode(QSGNode *old, UpdatePaintNodeData *) {
   provider->value->setVerticalWrapMode(tileY ? QSGTexture::Repeat
                                              : QSGTexture::ClampToEdge);
   if (!painted.isEmpty()) {
-    qreal sx = tileX ? d->dpr : d->pixels.width() / painted.width();
-    qreal sy = tileY ? d->dpr : d->pixels.height() / painted.height();
+    qreal sx = tileX ? d->dpr : imageSize.width() / painted.width();
+    qreal sy = tileY ? d->dpr : imageSize.height() / painted.height();
     sourceRect = QRectF((visible.x() - painted.x()) * sx,
                         (visible.y() - painted.y()) * sy, visible.width() * sx,
                         visible.height() * sy);
@@ -948,12 +1126,16 @@ void Image::setLoadingMode(LoadingMode value) {
   d->loadingMode = value;
   if (value == Suspended) {
     ++d->generation;
+    ++d->displayProbeToken;
+    d->displayProbe = {};
+    d->networkSelection = None();
     delete d->download;
     d->download = nullptr;
     d->request = None();
     d->playback = None();
     d->candidate = None();
     d->networkInput = None();
+    d->networkSnapshot = {};
     d->networkFile = None();
     d->clearFrame();
     d->stopClock();
@@ -1009,6 +1191,7 @@ void Image::setSource(const QUrl &value) {
   d->networkInput = None();
   d->networkFile = None();
   d->networkIdentity.clear();
+  d->networkSnapshot = {};
   d->resumeRemaining = None();
   if (isComponentComplete())
     d->seekFrame = 0;
@@ -1027,6 +1210,18 @@ void Image::setSource(const QUrl &value) {
 }
 Image::Status Image::status() const { return d->status; }
 bool Image::hasFrame() const { return d->hasFrame(); }
+bool Image::frameDataRequired() const { return d->frameDataRequired; }
+void Image::setFrameDataRequired(bool value) {
+  if (d->frameDataRequired == value)
+    return;
+  QPointer<Image> guard(this);
+  d->frameDataRequired = value;
+  emit frameDataRequiredChanged();
+  if (!guard)
+    return;
+  if (value && (d->displayProbe || (d->display && d->pending.isNull())))
+    d->reload(true);
+}
 qreal Image::progress() const { return d->progress; }
 QString Image::errorString() const { return d->error; }
 QSize Image::sourceSize() const {

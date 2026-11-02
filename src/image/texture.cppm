@@ -5,6 +5,7 @@ module;
 #include <QtQuick/QSGTextureMaterial>
 export module qextra:image.texture;
 import qextra.qt;
+import :image.service;
 import rstd;
 using namespace rstd::prelude;
 
@@ -25,6 +26,7 @@ struct TextureEntry {
   QRhiTexture *texture{};
   QHash<const void *, Observer> observers;
   QImage pending, frame;
+  QSharedPointer<image::DisplayHandle> display;
   QSize size;
   quint64 serial{}, bytes{}, stamp{}, generation{};
   int users{};
@@ -133,8 +135,28 @@ struct TextureState {
     ++counts.generation;
     publish();
   }
+  auto find(const QSharedPointer<image::DisplayHandle> &display, bool mipmap,
+            QRhi *backend) -> QSharedPointer<TextureEntry> {
+    if (!display || !backend || backend != rhi)
+      return {};
+    trim();
+    const auto key = QStringLiteral("%1:%2:%3:%4")
+                         .arg(display->identity)
+                         .arg(display->size.width())
+                         .arg(display->size.height())
+                         .arg(mipmap);
+    auto found = entries.value(key);
+    if (!found || found->failed || !found->texture ||
+        found->generation != counts.generation)
+      return {};
+    ++found->users;
+    ++counts.hits;
+    publish();
+    return found;
+  }
   auto acquire(QImage image, bool mipmap, QRhi *backend, quint64 displayId,
-               bool retained) -> QSharedPointer<TextureEntry> {
+               bool retained, QSharedPointer<image::DisplayHandle> display)
+      -> QSharedPointer<TextureEntry> {
     if (!backend || image.isNull() ||
         image.width() > backend->resourceLimit(QRhi::TextureSizeMax) ||
         image.height() > backend->resourceLimit(QRhi::TextureSizeMax))
@@ -168,6 +190,7 @@ struct TextureState {
     entry->size = image.size();
     entry->mipmap = mipmap;
     entry->retained = retained && displayId;
+    entry->display = rstd::move(display);
     entry->generation = counts.generation;
     entry->pending = image;
     entry->users = 1;
@@ -263,7 +286,8 @@ public:
       : state_(state), receiver_(receiver) {}
   ~ImageTexture() override { state_->release(entry_, this); }
   bool setImage(QImage image, bool mipmap, QRhi *rhi, quint64 displayId,
-                bool retained, quint64 generation) {
+                bool retained, quint64 generation,
+                QSharedPointer<image::DisplayHandle> display) {
     if (!displayId && entry_ && !entry_->failed && entry_->dynamic &&
         rhi == state_->rhi && entry_->generation == state_->counts.generation &&
         entry_->size == image.size() && entry_->mipmap == mipmap) {
@@ -271,7 +295,18 @@ public:
       entry_->observers.insert(this, {receiver_, generation});
       return true;
     }
-    auto entry = state_->acquire(image, mipmap, rhi, displayId, retained);
+    auto entry = state_->acquire(image, mipmap, rhi, displayId, retained,
+                                 rstd::move(display));
+    if (!entry)
+      return false;
+    state_->release(entry_, this);
+    entry_ = entry;
+    entry_->observers.insert(this, {receiver_, generation});
+    return true;
+  }
+  bool setDisplay(const QSharedPointer<image::DisplayHandle> &display,
+                  bool mipmap, QRhi *rhi, quint64 generation) {
+    auto entry = state_->find(display, mipmap, rhi);
     if (!entry)
       return false;
     state_->release(entry_, this);

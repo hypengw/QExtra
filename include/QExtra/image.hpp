@@ -23,6 +23,8 @@ public:
   Q_INVOKABLE bool setTextureCapacityMiB(QQuickWindow *, int);
   Q_INVOKABLE void trimTextures(QQuickWindow *);
   Q_INVOKABLE QVariantMap textureStatistics(QQuickWindow *) const;
+  Q_INVOKABLE QVariantMap networkStatistics() const;
+  Q_INVOKABLE QVariantMap decodeStatistics() const;
 signals:
   void capacityMiBChanged();
 };
@@ -54,6 +56,8 @@ class Image : public QQuickItem {
   Q_PROPERTY(bool retainWhileLoading READ retainWhileLoading WRITE
                  setRetainWhileLoading NOTIFY retainWhileLoadingChanged)
   Q_PROPERTY(bool cache READ cache WRITE setCache NOTIFY cacheChanged)
+  Q_PROPERTY(bool frameDataRequired READ frameDataRequired WRITE
+                 setFrameDataRequired NOTIFY frameDataRequiredChanged)
   Q_PROPERTY(int currentFrame READ currentFrame WRITE setCurrentFrame NOTIFY
                  currentFrameChanged)
   Q_PROPERTY(int frameCount READ frameCount NOTIFY frameCountChanged)
@@ -124,6 +128,8 @@ public:
   void setRetainWhileLoading(bool);
   bool cache() const;
   void setCache(bool);
+  bool frameDataRequired() const;
+  void setFrameDataRequired(bool);
   int currentFrame() const;
   void setCurrentFrame(int);
   int frameCount() const;
@@ -148,6 +154,7 @@ signals:
   void mipmapChanged();
   void retainWhileLoadingChanged();
   void cacheChanged();
+  void frameDataRequiredChanged();
   void currentFrameChanged();
   void frameCountChanged();
 
@@ -161,6 +168,7 @@ protected:
 private slots:
   void imageReady();
   void imageTextureFailed(quint64 generation);
+  void imageDisplayResolved(quint64 generation, bool hit);
 };
 
 class AnimatedImage : public Image {
