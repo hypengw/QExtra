@@ -33,6 +33,7 @@ class Image : public QQuickItem {
   QML_NAMED_ELEMENT(Image)
   Q_PROPERTY(QUrl source READ source WRITE setSource NOTIFY sourceChanged)
   Q_PROPERTY(Status status READ status NOTIFY statusChanged)
+  Q_PROPERTY(bool hasFrame READ hasFrame NOTIFY hasFrameChanged)
   Q_PROPERTY(qreal progress READ progress NOTIFY progressChanged)
   Q_PROPERTY(QString errorString READ errorString NOTIFY statusChanged)
   Q_PROPERTY(QSize sourceSize READ sourceSize WRITE setSourceSize NOTIFY
@@ -97,6 +98,8 @@ public:
   QUrl source() const;
   void setSource(const QUrl &);
   Status status() const;
+  // Available content, including retained frames; not GPU presentation.
+  bool hasFrame() const;
   qreal progress() const;
   QString errorString() const;
   QSize sourceSize() const;
@@ -132,6 +135,7 @@ signals:
   void preparationScopeChanged();
   void sourceChanged();
   void statusChanged();
+  void hasFrameChanged();
   void frameReady(const QUrl &source, const QImage &image);
   void progressChanged();
   void sourceSizeChanged();

@@ -152,6 +152,7 @@ public:
   QMetaObject::Connection invalidationConnection;
   QMetaObject::Connection visibilityConnection;
   bool inViewport{}, wakePending{};
+  bool notifiedHasFrame{};
   QPointer<QQmlEngine> observedEngine;
   rstd::sync::atomic::Atomic<bool> invalidated;
 
@@ -197,13 +198,36 @@ public:
       wake();
     }
   }
+  bool hasFrame() const {
+    return !pixels.isEmpty() && (status != Image::Error || retain);
+  }
+  bool notifyHasFrame() {
+    const bool value = hasFrame();
+    if (notifiedHasFrame == value)
+      return true;
+    notifiedHasFrame = value;
+    QPointer<Image> guard(item);
+    const auto before = generation;
+    emit item->hasFrameChanged();
+    return guard && guard->d->generation == before;
+  }
+  void clearFrame() {
+    pending = {};
+    pixels = {};
+  }
   void state(Image::Status value, QString message = {}) {
-    if (status == value && error == message)
+    if (status == value && error == message) {
+      notifyHasFrame();
       return;
+    }
+    QPointer<Image> guard(item);
+    const auto before = generation;
     status = value;
     error = message;
     if (value != Image::Loading)
       setProgress(value == Image::Ready ? 1 : 0);
+    if (!guard || guard->d->generation != before || !notifyHasFrame())
+      return;
     emit item->statusChanged();
   }
   void setProgress(qreal value) {
@@ -221,11 +245,12 @@ public:
     request = None();
     playback = None();
     candidate = None();
-    pending = {};
+    if (!retain)
+      clearFrame();
     stopClock();
-    state(Image::Error, message);
     qmlWarning(item) << message;
     item->update();
+    state(Image::Error, message);
   }
   bool active() const {
     return loadingMode != Image::Suspended && inViewport && item->isVisible() &&
@@ -267,7 +292,7 @@ public:
     playback = None();
     return true;
   }
-  void cancelRequest() {
+  void cancelRequest(bool keepImage = false) {
     ++generation;
     delete download;
     download = nullptr;
@@ -276,7 +301,8 @@ public:
     request = None();
     playback = None();
     candidate = None();
-    pending = {};
+    if (!retain && !keepImage)
+      pending = {};
     awaiting = false;
     rewind = false;
     ended = false;
@@ -285,7 +311,7 @@ public:
     deadline = position();
   }
   void reload(bool keepImage = false) {
-    cancelRequest();
+    cancelRequest(keepImage);
     load(keepImage);
   }
   void load(bool keepImage = false) {
@@ -294,16 +320,18 @@ public:
     setProgress(0);
     if (!guard || guard->d->generation != before)
       return;
-    if (!retain && !keepImage) {
-      pixels = {};
+    if (source.isEmpty() || (!retain && !keepImage)) {
+      clearFrame();
       item->setImplicitSize(0, 0);
+      if (!guard || guard->d->generation != before)
+        return;
     }
     item->update();
+    if (!notifyHasFrame())
+      return;
     if (source.isEmpty()) {
-      pixels = {};
-      item->setImplicitSize(0, 0);
-      state(Image::Null);
       stopClock();
+      state(Image::Null);
       return;
     }
     if (!item->isComponentComplete())
@@ -365,6 +393,8 @@ public:
       contextId = value;
     }
     state(Image::Loading);
+    if (!guard || guard->d->generation != before)
+      return;
     if (!networkUrl.isEmpty()) {
       if (networkFile) {
         networkUrl = QUrl();
@@ -412,8 +442,8 @@ public:
       request->set_prefetch(!active());
       request->observe(item, "imageReady");
     }
-    state(Image::Loading);
     wake();
+    state(Image::Loading);
   }
   void publish(Arc<image::Frame> frameOwner,
                Option<qreal> sharedRemaining = {}) {
@@ -510,8 +540,12 @@ public:
       if (playback) {
         playback->refresh();
       } else if (!needsFrame) {
+        QPointer<Image> guard(item);
+        const auto before = generation;
         seekFrame = wantsShared() ? 0 : frame;
         reload();
+        if (!guard || guard->d->generation != before + 1)
+          return;
       }
     }
     if (playback)
@@ -786,7 +820,7 @@ void Image::imageReady() { d->tick(); }
 void Image::imageTextureFailed(quint64 generation) {
   if (generation != d->generation)
     return;
-  d->pixels = {};
+  d->clearFrame();
   releaseResources();
   d->fail(QStringLiteral("Image texture allocation failed"));
 }
@@ -829,7 +863,7 @@ QSGNode *Image::updatePaintNode(QSGNode *old, UpdatePaintNodeData *) {
     }
     return nullptr;
   }
-  if (d->pixels.isEmpty() || (d->status == Error && !d->retain)) {
+  if (!d->hasFrame()) {
     delete node;
     if (d->provider) {
       delete d->provider->value;
@@ -921,14 +955,15 @@ void Image::setLoadingMode(LoadingMode value) {
     d->candidate = None();
     d->networkInput = None();
     d->networkFile = None();
-    d->pending = {};
-    d->pixels = {};
+    d->clearFrame();
     d->stopClock();
     releaseResources();
     update();
   } else if (old == Suspended)
     d->reload();
   if (!guard)
+    return;
+  if (!d->notifyHasFrame())
     return;
   d->wake();
   update();
@@ -991,6 +1026,7 @@ void Image::setSource(const QUrl &value) {
     d->load();
 }
 Image::Status Image::status() const { return d->status; }
+bool Image::hasFrame() const { return d->hasFrame(); }
 qreal Image::progress() const { return d->progress; }
 QString Image::errorString() const { return d->error; }
 QSize Image::sourceSize() const {
@@ -1070,6 +1106,11 @@ void Image::setRetainWhileLoading(bool value) {
   if (value == d->retain)
     return;
   d->retain = value;
+  if (!value && d->status == Error)
+    d->clearFrame();
+  update();
+  if (!d->notifyHasFrame())
+    return;
   emit retainWhileLoadingChanged();
 }
 bool Image::cache() const { return d->cache; }
@@ -1121,10 +1162,13 @@ void AnimatedImage::setPaused(bool value) {
     d->deadline = d->position() + d->remaining;
   }
   d->paused = value;
+  QPointer<AnimatedImage> guard(this);
   if (detached)
     d->reload(true);
   else
     d->wake();
+  if (!guard)
+    return;
   emit pausedChanged();
 }
 qreal AnimatedImage::speed() const { return d->speed; }
@@ -1137,11 +1181,14 @@ void AnimatedImage::setSpeed(qreal value) {
       d->speed / value;
   d->deadline = d->position() + d->remaining;
   d->speed = value;
+  QPointer<AnimatedImage> guard(this);
   if (detached) {
     d->resumeRemaining = Some(d->remaining);
     d->reload(true);
   } else
     d->wake();
+  if (!guard)
+    return;
   emit speedChanged();
 }
 int AnimatedImage::loops() const { return d->loops; }
@@ -1150,8 +1197,11 @@ void AnimatedImage::setLoops(int value) {
     return;
   const bool detached = d->detachShared();
   d->loops = value;
+  QPointer<AnimatedImage> guard(this);
   if (detached)
     d->reload(true);
+  if (!guard)
+    return;
   emit loopsChanged();
 }
 void AnimatedImage::restart() {
@@ -1180,8 +1230,11 @@ void AnimatedImage::setSharedPlayback(bool value) {
     d->seekFrame = 0;
     d->resumeRemaining = None();
   }
+  QPointer<AnimatedImage> guard(this);
   if (value || detached)
     d->reload(true);
+  if (!guard)
+    return;
   emit sharedPlaybackChanged();
 }
 } // namespace qextra

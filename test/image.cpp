@@ -18,6 +18,156 @@ template <typename F> bool wait_for(F predicate, int timeout = 5000) {
   }
   return predicate();
 }
+
+void test_has_frame(qextra::AnimatedImage *image, QQuickWindow *window,
+                    const QUrl &source) {
+  QList<bool> changes;
+  const auto connection =
+      QObject::connect(image, &qextra::Image::hasFrameChanged, image, [&] {
+        const bool value = image->hasFrame();
+        rstd_assert(changes.isEmpty() || changes.last() != value);
+        changes.append(value);
+      });
+  auto check = [&](bool value, int count) {
+    rstd_assert(image->hasFrame() == value);
+    rstd_assert(image->property("hasFrame").isValid());
+    rstd_assert(image->property("hasFrame").toBool() == value);
+    rstd_assert(changes.size() == count);
+  };
+  auto ready = [&] {
+    rstd_assert(wait_for([&] {
+      return image->status() == qextra::Image::Ready && image->hasFrame();
+    }));
+  };
+  const auto missing = source.resolved(QUrl("missing-has-frame.ppm"));
+  check(false, 0);
+  image->setSource(source);
+  rstd_assert(image->status() == qextra::Image::Loading);
+  check(false, 0);
+  ready();
+  check(true, 1);
+  const auto decoded = qextra::image::service_statistics().decoded;
+  image->setRetainWhileLoading(true);
+  check(true, 1);
+  image->setVisible(false);
+  check(true, 1);
+  image->setVisible(true);
+  image->setSource(missing);
+  rstd_assert(image->status() == qextra::Image::Loading);
+  check(true, 1);
+  rstd_assert(
+      wait_for([&] { return image->status() == qextra::Image::Error; }));
+  check(true, 1);
+  const auto implicitSize =
+      QSizeF(image->implicitWidth(), image->implicitHeight());
+  const auto intrinsicSize = image->intrinsicSize();
+  image->setRetainWhileLoading(false);
+  check(false, 2);
+  rstd_assert(QSizeF(image->implicitWidth(), image->implicitHeight()) ==
+              implicitSize);
+  rstd_assert(image->intrinsicSize() == intrinsicSize);
+  image->setRetainWhileLoading(true);
+  check(false, 2);
+  image->setSource(source);
+  check(false, 2);
+  ready();
+  check(true, 3);
+  rstd_assert(qextra::image::service_statistics().decoded == decoded);
+  image->setSource(missing);
+  rstd_assert(image->status() == qextra::Image::Loading);
+  check(true, 3);
+  image->setRetainWhileLoading(false);
+  check(true, 3);
+  rstd_assert(
+      wait_for([&] { return image->status() == qextra::Image::Error; }));
+  check(false, 4);
+  image->setRetainWhileLoading(true);
+  check(false, 4);
+  image->setRetainWhileLoading(false);
+  image->setSource(source);
+  ready();
+  check(true, 5);
+  image->setLoadingMode(qextra::Image::Prefetch);
+  check(true, 5);
+  image->setLoadingMode(qextra::Image::Suspended);
+  check(false, 6);
+  image->setLoadingMode(qextra::Image::Automatic);
+  check(false, 6);
+  ready();
+  check(true, 7);
+  image->setSource(QUrl());
+  rstd_assert(image->status() == qextra::Image::Null);
+  check(false, 8);
+  image->setSource(source);
+  ready();
+  check(true, 9);
+  image->setSource(missing);
+  rstd_assert(image->status() == qextra::Image::Loading);
+  check(false, 10);
+  rstd_assert(
+      wait_for([&] { return image->status() == qextra::Image::Error; }));
+  check(false, 10);
+  image->setSource(QUrl());
+  check(false, 10);
+  auto captureHasColor = [&](QColor left, QColor right) {
+    auto capture = window->grabWindow();
+    if (capture.isNull())
+      return false;
+    const auto scale = qreal(capture.width()) / window->width();
+    const auto first = image->mapToScene(QPointF(8, 32)) * scale;
+    const auto second = image->mapToScene(QPointF(56, 32)) * scale;
+    return capture.pixelColor(first.toPoint()) == left &&
+           capture.pixelColor(second.toPoint()) == right;
+  };
+  rstd_assert(wait_for([&] { return captureHasColor(Qt::blue, Qt::blue); }));
+  image->setRetainWhileLoading(true);
+  QObject::connect(
+      image, &qextra::Image::hasFrameChanged, image,
+      [&] { image->setSource(missing); }, Qt::SingleShotConnection);
+  image->setSource(source);
+  rstd_assert(
+      wait_for([&] { return image->status() == qextra::Image::Error; }));
+  check(true, 11);
+  rstd_assert(wait_for([&] { return captureHasColor(Qt::red, Qt::green); }));
+  image->setSource(QUrl());
+  check(false, 12);
+  image->setRetainWhileLoading(false);
+  QObject::connect(
+      image, &qextra::Image::hasFrameChanged, image,
+      [&] { image->setSource(QUrl()); }, Qt::SingleShotConnection);
+  image->setSource(source);
+  rstd_assert(wait_for([&] { return image->source().isEmpty(); }));
+  rstd_assert(image->status() == qextra::Image::Null);
+  check(false, 14);
+  QObject::disconnect(connection);
+  QQmlComponent component(qmlEngine(image));
+  component.setData(R"(
+import QtQuick
+import QExtra as QE
+QE.Image { width: 64; height: 64 }
+)",
+                    QUrl("qrc:/has-frame-deletion.qml"));
+  for (bool onFirstFrame : {true, false}) {
+    QPointer<qextra::Image> temporary =
+        qobject_cast<qextra::Image *>(component.create());
+    rstd_assert(temporary);
+    temporary->setParentItem(window->contentItem());
+    QObject::connect(temporary, &qextra::Image::hasFrameChanged, window, [&] {
+      if (temporary && temporary->hasFrame() == onFirstFrame)
+        delete temporary;
+    });
+    temporary->setSource(source);
+    if (!onFirstFrame) {
+      rstd_assert(wait_for([&] {
+        return temporary && temporary->status() == qextra::Image::Ready;
+      }));
+      temporary->setSource(QUrl());
+    }
+    rstd_assert(wait_for([&] { return temporary.isNull(); }));
+  }
+  qInfo() << "Image hasFrame lifecycle, retained errors and reentrant "
+             "notifications passed";
+}
 } // namespace
 
 int run_image(int argc, char **argv) {
@@ -54,6 +204,7 @@ Window {
     auto *still = root->findChild<qextra::Image *>("still");
     auto *animation = root->findChild<qextra::AnimatedImage *>("animation");
     rstd_assert(window && still && animation);
+    rstd_assert(!still->hasFrame());
     QImage decoded;
     QUrl decodedSource;
     QObject::connect(still, &qextra::Image::frameReady,
@@ -66,6 +217,7 @@ Window {
         wait_for([&] { return still->status() == qextra::Image::Ready; }));
     rstd_assert(still->implicitWidth() == 2 && still->implicitHeight() == 1);
     rstd_assert(still->sourceSize() == QSize(2, 1));
+    rstd_assert(still->hasFrame());
     rstd_assert(still->maxSize() == QSize(512, 512));
     rstd_assert(decodedSource == source && decoded.size() == QSize(2, 1));
     rstd_assert(decoded.pixelColor(0, 0) == QColor(Qt::red));
@@ -107,6 +259,7 @@ QE.Image {
     }));
     rstd_assert(
         wait_for([] { return qextra::image::payload_count() == usize(); }));
+    test_has_frame(animation, window, source);
     still->setMaxSize(QSize(1, 1));
     rstd_assert(
         wait_for([&] { return still->status() == qextra::Image::Ready; }));
@@ -154,6 +307,7 @@ QE.Image {
         wait_for([&] { return still->status() == qextra::Image::Ready; }));
     still->setSource(QUrl());
     rstd_assert(still->status() == qextra::Image::Null);
+    rstd_assert(!still->hasFrame());
     delete root;
   }
   rstd_assert(
