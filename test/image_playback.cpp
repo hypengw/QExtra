@@ -161,6 +161,7 @@ Window {
   auto *a = root->findChild<qextra::AnimatedImage *>("first");
   auto *b = root->findChild<qextra::AnimatedImage *>("second");
   auto *c = root->findChild<qextra::AnimatedImage *>("third");
+  c->setFrameDataRequired(false);
   const auto source = QUrl::fromLocalFile(path);
   rstd_assert(wait_for([&] { return window->isExposed(); }));
   const auto before = qi::service_statistics().opened;
@@ -362,12 +363,72 @@ void static_tests() {
     rstd_assert(invalid.snapshot().error.is_some());
   }
   drain();
+  qi::set_cache_limit(usize(16 * 1024 * 1024));
+  {
+    QQmlEngine engine;
+    auto warm = join(engine, path);
+    rstd_assert(wait_for([&] { return warm.snapshot(false).frame.is_some(); }));
+  }
+  const auto warmed = qi::service_statistics();
+  {
+    QQmlEngine engine;
+    auto ready = join(engine, path);
+    rstd_assert(ready.snapshot(false).frame.is_some());
+    rstd_assert(qi::service_statistics().opened == warmed.opened);
+    rstd_assert(qi::service_statistics().decoded == warmed.decoded);
+  }
+  drain();
+}
+
+void preparation_tests() {
+  QTemporaryDir directory;
+  const auto path = directory.filePath("prepare.gif");
+  QFile file(path);
+  rstd_assert(file.open(QIODevice::WriteOnly));
+  const auto bytes =
+      QByteArray::fromHex("47494638396101000100800000ff000000ff00"
+                          "21ff0b4e45545343415045322e300301000000"
+                          "21f904000a0000002c0000000001000100000202440100"
+                          "21f904000a0000002c00000000010001000002024c0100"
+                          "21f904000a0000002c00000000010001000002024401003b");
+  rstd_assert(file.write(bytes) == bytes.size());
+  file.close();
+  qi::set_cache_limit(usize(16 * 1024 * 1024));
+  {
+    QQmlEngine engine;
+    auto first =
+        qi::Playback::open(&engine, qi::Request::open(path, {}, true).unwrap(),
+                           nullptr, false, true)
+            .unwrap();
+    rstd_assert(
+        wait_for([&] { return first.snapshot(false).frame.is_some(); }));
+    rstd_assert(
+        wait_for([] { return qi::service_statistics().running == usize(); }));
+    auto initial = first.snapshot(false);
+    rstd_assert(initial.info.animated &&
+                (*initial.frame)->image.index == u64());
+    const auto decoded = qi::service_statistics().decoded;
+    for (int i = 0; i < 8; ++i) {
+      QCoreApplication::sendPostedEvents();
+      QCoreApplication::processEvents();
+    }
+    rstd_assert(qi::service_statistics().decoded == decoded);
+    rstd_assert(first.snapshot(false).version == initial.version);
+    first.prepare(false);
+    first.suspend(false);
+    rstd_assert(first.snapshot(false).frame.is_some());
+    rstd_assert(wait_for(
+        [&] { return first.snapshot(false).version > initial.version; }));
+    first.suspend(true);
+  }
+  drain();
 }
 } // namespace
 
 int run_image_playback(int argc, char **argv) {
   QGuiApplication app(argc, argv);
   static_tests();
+  preparation_tests();
   for (int i = 1; i < argc; ++i) {
     const auto path = QString::fromLocal8Bit(argv[i]);
     initialization_tests(path);

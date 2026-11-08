@@ -16,6 +16,86 @@ template <class F> bool until(F predicate) {
   return predicate();
 }
 
+void test_warm_display() {
+  QTemporaryDir directory;
+  const auto path = directory.filePath("warm.ppm");
+  auto write = [&](const QByteArray &bytes) {
+    QFile file(path);
+    rstd_assert(file.open(QIODevice::WriteOnly));
+    rstd_assert(file.write(bytes) == bytes.size());
+  };
+  write(QByteArray("P6\n1 1\n255\n") + QByteArray::fromHex("ff0000"));
+  QQmlEngine engine;
+  QQmlComponent component(&engine);
+  component.setData(R"(
+import QtQuick
+import QtQuick.Window
+import QExtra as QE
+Window {
+  visible: true; width: 64; height: 32
+  QE.AnimatedImage {
+    objectName: "subject"; anchors.fill: parent
+    frameDataRequired: false; sharedPlayback: true; smooth: false
+    fillMode: QE.Image.Stretch
+  }
+})",
+                    QUrl("qrc:/warm-display.qml"));
+  auto *root = component.create();
+  if (!root)
+    qCritical() << component.errors();
+  rstd_assert(root);
+  auto *window = qobject_cast<QQuickWindow *>(root);
+  auto *image = root->findChild<qextra::AnimatedImage *>("subject");
+  rstd_assert(qextra::image::set_texture_cache_limit(window, 1024 * 1024));
+  auto stats = [&] { return qextra::image::texture_statistics(window); };
+  auto red = [&] {
+    auto pixels = window->grabWindow();
+    return !pixels.isNull() &&
+           pixels.pixelColor(pixels.width() / 2, pixels.height() / 2).red() >
+               240;
+  };
+  image->setSource(QUrl::fromLocalFile(path));
+  rstd_assert(
+      until([&] { return image->status() == qextra::Image::Ready && red(); }));
+  image->setLoadingMode(qextra::Image::Suspended);
+  rstd_assert(until([&] {
+    window->grabWindow();
+    return stats().active_bytes == 0 && stats().idle_bytes > 0;
+  }));
+  qextra::image::clear_cache();
+  const auto warm = stats();
+  const auto decoded = qextra::image::service_statistics();
+  image->setLoadingMode(qextra::Image::Automatic);
+  rstd_assert(
+      until([&] { return image->status() == qextra::Image::Ready && red(); }));
+  rstd_assert(stats().uploads == warm.uploads &&
+              stats().allocations == warm.allocations &&
+              stats().hits > warm.hits);
+  rstd_assert(qextra::image::service_statistics().decoded == decoded.decoded);
+  rstd_assert(qextra::image::service_statistics().opened == decoded.opened);
+  image->setLoadingMode(qextra::Image::Suspended);
+  qextra::image::trim_texture_cache(window);
+  rstd_assert(until([&] {
+    window->grabWindow();
+    return stats().active_bytes == 0 && stats().idle_bytes == 0;
+  }));
+  image->setLoadingMode(qextra::Image::Automatic);
+  rstd_assert(
+      until([&] { return image->status() == qextra::Image::Ready && red(); }));
+  rstd_assert(stats().uploads > warm.uploads);
+  rstd_assert(qextra::image::service_statistics().decoded > decoded.decoded);
+  image->setSource({});
+  write(QByteArray("P6\n2 1\n255\n") + QByteArray::fromHex("0000ff0000ff"));
+  image->setSource(QUrl::fromLocalFile(path));
+  rstd_assert(until([&] {
+    const auto pixels = window->grabWindow();
+    return image->status() == qextra::Image::Ready && !pixels.isNull() &&
+           pixels.pixelColor(pixels.width() / 2, pixels.height() / 2).blue() >
+               240;
+  }));
+  delete root;
+}
+
 void test_scroll_return(const QUrl &source) {
   QQmlEngine engine;
   QQmlComponent component(&engine);
@@ -292,6 +372,7 @@ Window {
     other.releaseResources();
     rstd_assert(until([&] { return !other.isExposed(); }));
     other.show();
+    rstd_assert(until([&] { return other.isExposed(); }));
     rstd_assert(until([&] { return colors(&other, false); }));
     const auto restored = qextra::image::texture_statistics(&other);
     // Window hiding is permitted to preserve the scene graph.
@@ -382,6 +463,7 @@ Window {
   rstd_assert(
       until([&] { return prepared->status() == qextra::Image::Ready; }));
   delete root;
+  test_warm_display();
   test_scroll_return(source);
   qextra::image::clear_cache();
   rstd_assert(

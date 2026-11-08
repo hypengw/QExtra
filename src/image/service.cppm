@@ -291,14 +291,17 @@ struct Service {
             ownedSource};
   }
   static QString display_key(const Key &key) {
-    return key.path + QString::fromLatin1("\n%1:%2:%3:%4:%5:%6:%7")
+    return key.path + QString::fromLatin1("\n%1:%2:%3:%4:%5:%6:%7:%8:%9:%10")
                           .arg(key.width.to_primitive())
                           .arg(key.height.to_primitive())
                           .arg(key.context)
                           .arg(key.frame)
                           .arg(int(key.mode))
                           .arg(key.maxWidth.to_primitive())
-                          .arg(key.maxHeight.to_primitive());
+                          .arg(key.maxHeight.to_primitive())
+                          .arg(key.size)
+                          .arg(key.modified)
+                          .arg(key.ownedSource);
   }
   static void sweep_displays(Cache &cache) {
     for (int work = 0; work < 4 && !cache.displaySweep.isEmpty(); ++work) {
@@ -322,7 +325,8 @@ struct Service {
     key.frame = 0;
     auto locked = cache.lock().unwrap_unchecked();
     for (auto &entry : locked->entries)
-      if (entry.key == key && entry.complete) {
+      if (entry.key == key &&
+          (entry.complete || usize(index) < entry.frames.len())) {
         entry.stamp = ++locked->clock;
         info = entry.info;
         eof = usize(index) >= entry.frames.len();
@@ -341,7 +345,7 @@ struct Service {
     auto locked = cache.lock().unwrap_unchecked();
     locked->entries.retain(
         [](const CacheEntry &entry) { return !entry.frames.is_empty(); });
-    if (image && !info.animated && !resource.identity().isEmpty()) {
+    if (image && !info.animated) {
       const auto name = display_key(key);
       display = locked->displays.value(name).toStrongRef();
       if (!display) {
@@ -698,6 +702,16 @@ public:
       handle->retain_source(source);
     return handle;
   }
+  auto cached_display() const -> QSharedPointer<DisplayHandle> {
+    if (state_->key.frame != 0)
+      return {};
+    auto handle = service().display(state_->key);
+    if (handle) {
+      auto source = state_->resource.lock().unwrap_unchecked();
+      handle->retain_source(*source);
+    }
+    return handle;
+  }
   static auto cached_source(QString identity, wi::DecodeRequest size,
                             bool animation = false, quint64 context = 0,
                             int initialFrame = 0,
@@ -710,35 +724,43 @@ public:
     auto image = s.cached(key, initialFrame, info, eof);
     if (!image || info.animated)
       return None();
-    if (image->display && !resource.identity().isEmpty())
-      image->display->retain_source(rstd::move(resource));
     auto cancellation = wi::Cancellation::make();
     if (cancellation.is_err())
       return None();
-    auto state =
-        Arc<State>::try_make(identity, None<wi::Source>(), key, animation, true,
-                             size, cancellation.unwrap_unchecked(), QString());
+    auto state = Arc<State>::try_make(
+        identity, None<wi::Source>(), key, animation, true, size,
+        cancellation.unwrap_unchecked(), QString(), rstd::move(resource));
     if (state.is_err())
       return None();
-    s.counts->payloads.fetch_add(usize(1), Ordering::Relaxed);
-    auto frame =
-        Arc<Frame>::try_make(rstd::move(image->image), s.counts.clone(),
-                             image->identity, true, image->display);
-    if (frame.is_err()) {
-      s.counts->payloads.fetch_sub(usize(1), Ordering::Relaxed);
+    if (!prime(*state, rstd::move(*image), info, initialFrame))
       return None();
-    }
-    {
-      auto fields = (*state)->fields.lock().unwrap_unchecked();
-      fields->info = info;
-      fields->ready = Some(frame.unwrap_unchecked());
-      fields->cachedFrame = Some((*fields->ready).clone());
-      fields->next = initialFrame + 1;
-    }
     return Some(Request(state.unwrap_unchecked()));
   }
 
 private:
+  static bool prime(const Arc<State> &state, DisplayResult image,
+                    wi::ImageInfo info, int initialFrame) {
+    auto &s = service();
+    if (image.display) {
+      auto source = state->resource.lock().unwrap_unchecked();
+      image.display->retain_source(*source);
+    }
+    s.counts->payloads.fetch_add(usize(1), Ordering::Relaxed);
+    auto frame = Arc<Frame>::try_make(rstd::move(image.image), s.counts.clone(),
+                                      info.animated ? 0 : image.identity,
+                                      !info.animated, image.display);
+    if (frame.is_err()) {
+      s.counts->payloads.fetch_sub(usize(1), Ordering::Relaxed);
+      return false;
+    }
+    auto fields = state->fields.lock().unwrap_unchecked();
+    fields->info = info;
+    fields->ready = Some(frame.unwrap_unchecked());
+    fields->next = initialFrame + 1;
+    if (!info.animated)
+      fields->cachedFrame = Some((*fields->ready).clone());
+    return true;
+  }
   static auto create(QString path, Option<wi::Source> input,
                      wi::DecodeRequest size, bool animation, bool cache,
                      quint64 context, int initialFrame, QString root = {},
@@ -786,6 +808,13 @@ private:
                                       rstd::move(root), rstd::move(resource));
     if (state.is_err()) {
       return Err(wi::Error::ResourceLimit);
+    }
+    if (cache) {
+      wi::ImageInfo info;
+      bool eof{};
+      auto hit = s.cached((*state)->key, initialFrame, info, eof);
+      if (hit && !prime(*state, rstd::move(*hit), info, initialFrame))
+        return Err(wi::Error::ResourceLimit);
     }
     registry->push(state->downgrade());
     return Ok(Request(state.unwrap_unchecked()));

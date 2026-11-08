@@ -357,6 +357,8 @@ public:
     load(keepImage);
   }
   void load(bool keepImage = false) {
+    // A new request replaces content invalidated before this load began.
+    invalidated.exchange(false, rstd::sync::atomic::Ordering::AcqRel);
     QPointer<Image> guard(item);
     const auto before = generation;
     setProgress(0);
@@ -439,7 +441,7 @@ public:
     if (!guard || guard->d->generation != before)
       return;
     if (!networkUrl.isEmpty()) {
-      if (cache && !frameDataRequired && !animated &&
+      if (cache && !frameDataRequired &&
           (item->width() <= 0 || item->height() <= 0)) {
         if (auto *engine = qmlEngine(item)) {
           networkSelection = Some(image::NetworkSelection(engine, networkUrl));
@@ -486,9 +488,23 @@ public:
       fail(QStringLiteral("Image request limit reached"));
       return;
     }
+    auto input = opened.unwrap_unchecked();
+    if (cache && !frameDataRequired && loadingMode != Image::Suspended &&
+        !displayAttempted) {
+      auto handle = input.cached_display();
+      if (handle && !handle->info.animated) {
+        request = Some(rstd::move(input));
+        displayAttempted = true;
+        displayProbe = handle;
+        displayProbeSent = displayProbeHit = false;
+        ++displayProbeToken;
+        item->update();
+        return;
+      }
+    }
     if (wantsShared()) {
-      auto shared = image::Playback::open(
-          qmlEngine(item), opened.unwrap_unchecked(), item, active());
+      auto shared = image::Playback::open(qmlEngine(item), rstd::move(input),
+                                          item, active(), preparing());
       if (shared.is_err()) {
         fail(QStringLiteral("Cannot join shared image playback"));
         return;
@@ -497,18 +513,31 @@ public:
       if (networkInput)
         networkInput = playback->owned_source();
     } else {
-      request = Some(opened.unwrap_unchecked());
+      request = Some(rstd::move(input));
       request->set_prefetch(!active());
       request->observe(item, "imageReady");
     }
     state(Image::Loading);
     if (!guard || guard->d->generation != before)
       return;
-    if (request && !animated) {
+    if (!active() && !preparing()) {
+      wake();
+      return;
+    }
+    if (playback) {
+      auto ready = playback->snapshot();
+      if (ready.frame) {
+        if (publishInfo(ready.info))
+          publish(ready.frame.take().unwrap_unchecked(), Some(ready.remaining));
+        return;
+      }
+    } else if (request) {
       auto ready = request->poll();
       if (ready.frame) {
         if (publishInfo(ready.info))
           publish(ready.frame.take().unwrap_unchecked());
+        if (guard && guard->d->generation == before)
+          wake();
         return;
       }
     }
@@ -624,8 +653,10 @@ public:
           return;
       }
     }
-    if (playback)
+    if (playback) {
       playback->suspend(!active());
+      playback->prepare(preparing());
+    }
     if (!active() && !preparing()) {
       delete download;
       download = nullptr;
@@ -646,12 +677,12 @@ public:
       suspended = false;
       deadline = position() + remaining;
     }
+    if (displayProbe) {
+      if (active() && !displayProbeSent)
+        item->update();
+      return;
+    }
     if (!networkUrl.isEmpty()) {
-      if (displayProbe) {
-        if (active() && !displayProbeSent)
-          item->update();
-        return;
-      }
       if (!download) {
         auto *engine = qmlEngine(item);
         if (!engine) {
@@ -661,15 +692,7 @@ public:
         if (!networkSelection)
           networkSelection = Some(image::NetworkSelection(engine, networkUrl));
         if (cache) {
-          auto cached = networkSelection->cached(decodeSize(), animated,
-                                                 contextId, seekFrame);
-          if (cached) {
-            networkSelection = None();
-            networkUrl = QUrl();
-            start(Ok(cached.take().unwrap()));
-            return;
-          }
-          if (!frameDataRequired && !animated && (active() || preparing()) &&
+          if (!frameDataRequired && (active() || preparing()) &&
               !displayAttempted) {
             displayAttempted = true;
             displayProbe =
@@ -680,6 +703,14 @@ public:
               item->update();
               return;
             }
+          }
+          auto cached = networkSelection->cached(decodeSize(), animated,
+                                                 contextId, seekFrame);
+          if (cached) {
+            networkSelection = None();
+            networkUrl = QUrl();
+            start(Ok(cached.take().unwrap()));
+            return;
           }
         }
         download = new image::NetworkLoad(
@@ -928,12 +959,17 @@ void Image::imageDisplayResolved(quint64 generation, bool hit) {
   auto display = d->displayProbe;
   d->displayProbe = {};
   d->displayProbeSent = d->displayProbeHit = false;
-  if (hit && (d->frameDataRequired || !d->networkSelection ||
-              !d->networkSelection->snapshot().fresh())) {
+  if (hit &&
+      (d->frameDataRequired ||
+       (d->networkSelection && !d->networkSelection->snapshot().fresh()))) {
     hit = false;
     d->networkSelection = None();
   }
   if (!hit) {
+    if (d->request) {
+      d->start(Ok(d->request.take().unwrap_unchecked()));
+      return;
+    }
     d->wake();
     return;
   }
@@ -950,6 +986,7 @@ void Image::imageDisplayResolved(quint64 generation, bool hit) {
   d->textureRetained = true;
   d->pixels = display->size;
   d->pending = {};
+  d->request = None();
   d->networkUrl = QUrl();
   d->needsFrame = false;
   if (sourceSize() != oldSourceSize) {
@@ -1318,7 +1355,7 @@ void Image::setCache(bool value) {
 }
 int Image::currentFrame() const { return d->frame; }
 void Image::setCurrentFrame(int value) {
-  if (value < 0 || (value == d->frame && d->status == Ready))
+  if (value < 0 || (value == d->frame && d->status == Ready && !d->playback))
     return;
   d->detachShared();
   d->independentControl = true;

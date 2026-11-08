@@ -69,7 +69,8 @@ void test_has_frame(qextra::AnimatedImage *image, QQuickWindow *window,
   image->setRetainWhileLoading(true);
   check(false, 2);
   image->setSource(source);
-  check(false, 2);
+  rstd_assert(image->status() == qextra::Image::Ready);
+  check(true, 3);
   ready();
   check(true, 3);
   rstd_assert(qextra::image::service_statistics().decoded == decoded);
@@ -92,7 +93,8 @@ void test_has_frame(qextra::AnimatedImage *image, QQuickWindow *window,
   image->setLoadingMode(qextra::Image::Suspended);
   check(false, 6);
   image->setLoadingMode(qextra::Image::Automatic);
-  check(false, 6);
+  rstd_assert(image->status() == qextra::Image::Ready);
+  check(true, 7);
   ready();
   check(true, 7);
   image->setSource(QUrl());

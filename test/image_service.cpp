@@ -141,6 +141,12 @@ int run_image_service(int argc, char **argv) {
     rstd_assert(qextra::image::service_statistics().waiting == usize());
   }
   {
+    qextra::image::set_cache_limit(usize(16 * 1024 * 1024));
+    {
+      auto warm = qextra::image::Request::open(name, {}).unwrap();
+      rstd_assert(warm.advance());
+      rstd_assert(until([&] { return warm.poll().frame.is_some(); }));
+    }
     qextra::image::set_worker_limit(usize(2));
     auto gate = QSharedPointer<DecodeGate>::create();
     const auto encoded =
@@ -162,6 +168,18 @@ int run_image_service(int argc, char **argv) {
     first.set_prefetch(true);
     rstd_assert(first.advance());
     rstd_assert(until([&] { return gate->entered.tryAcquire(); }));
+    rstd_assert(qextra::image::set_worker_limit(usize(1)));
+    const auto blocked = qextra::image::service_statistics();
+    for (bool animated : {false, true}) {
+      auto warm = qextra::image::Request::open(name, {}, animated).unwrap();
+      rstd_assert(warm.poll().frame.is_some());
+      const auto ready = qextra::image::service_statistics();
+      rstd_assert(ready.opened == blocked.opened &&
+                  ready.decoded == blocked.decoded);
+      rstd_assert(ready.running == blocked.running &&
+                  ready.waiting == blocked.waiting);
+    }
+    rstd_assert(qextra::image::set_worker_limit(usize(2)));
     auto second =
         qextra::image::Request::open_source(QStringLiteral("prefetch-two"),
                                             source.clone(), {}, false, false)

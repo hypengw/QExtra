@@ -31,7 +31,7 @@ public:
 struct Subscriber : QObject {
   QPointer<PlaybackSession> session;
   QPointer<QObject> receiver;
-  bool active{}, notified{};
+  bool active{}, preparing{}, notified{};
   quint64 version{};
   Subscriber(PlaybackSession *value, QObject *target);
   ~Subscriber() override;
@@ -60,7 +60,7 @@ public:
   Option<wi::Error> error;
   wi::ImageInfo info;
   quint64 version{};
-  usize active;
+  usize active, preparing;
   qreal deadline{}, remaining{};
   bool awaiting{}, ended{}, finished{};
 
@@ -68,6 +68,10 @@ public:
       : QObject(scheduler), owner(scheduler), request(rstd::move(input)) {
     request.suspend(true);
     request.observe(&owner->wake, "start");
+    auto ready = request.poll();
+    info = ready.info;
+    candidate = ready.frame.take();
+    error = ready.error;
   }
   ~PlaybackSession() override {
     request.cancel();
@@ -83,17 +87,33 @@ public:
     if (value) {
       if (active++ == usize()) {
         deadline = playback_time() + remaining;
-        request.suspend(false);
       }
       subscriber->notify();
     } else if (--active == usize()) {
       remaining = qMax<qreal>(0, deadline - playback_time());
-      request.suspend(true);
     }
+    reconcileActivity();
+    owner->wake.start();
+  }
+  void reconcileActivity() {
+    request.set_prefetch(active == usize());
+    request.suspend(active == usize() &&
+                    (preparing == usize() || current || error || finished));
+  }
+  void setPreparing(Subscriber *subscriber, bool value) {
+    if (subscriber->preparing == value)
+      return;
+    subscriber->preparing = value;
+    if (value)
+      ++preparing;
+    else
+      --preparing;
+    reconcileActivity();
     owner->wake.start();
   }
   void remove(Subscriber *subscriber) {
     setActive(subscriber, false);
+    setPreparing(subscriber, false);
     subscribers.retain(
         [subscriber](auto *entry) { return entry != subscriber; });
     if (subscribers.is_empty())
@@ -101,11 +121,12 @@ public:
   }
   void notify() {
     for (auto *subscriber : subscribers)
-      if (subscriber->active || error)
+      if (subscriber->active || subscriber->preparing || error)
         subscriber->notify();
   }
   void tick(qreal time) {
-    if (active == usize() || error || finished)
+    if ((active == usize() && (preparing == usize() || current)) || error ||
+        finished)
       return;
     // A cached request can hold its first frame before advance() is called.
     if (awaiting || !current) {
@@ -152,6 +173,12 @@ public:
       if (!info.animated) {
         finished = true;
         request.release_idle_decoder();
+        reconcileActivity();
+        return;
+      }
+      if (active == usize()) {
+        remaining = duration;
+        reconcileActivity();
         return;
       }
     }
@@ -233,7 +260,8 @@ public:
   Playback(Playback &&) noexcept = default;
   auto operator=(Playback &&) noexcept -> Playback & = default;
   static auto open(QQmlEngine *engine, Request request, QObject *receiver,
-                   bool active) -> Result<Playback, wi::Error> {
+                   bool active, bool preparing = false)
+      -> Result<Playback, wi::Error> {
     auto *scheduler = PlaybackScheduler::get(engine);
     if (scheduler->closing)
       return Err(wi::Error::Cancelled);
@@ -253,11 +281,18 @@ public:
     auto subscriber = Box<Subscriber>::make(session, receiver);
     session->subscribers.emplace_back(&*subscriber);
     session->setActive(&*subscriber, active);
+    session->setPreparing(&*subscriber, preparing);
+    if (!session->current && session->candidate)
+      session->tick(playback_time());
     return Ok(Playback(rstd::move(subscriber)));
   }
   void suspend(bool value) {
     if (subscriber_->session)
       subscriber_->session->setActive(&*subscriber_, !value);
+  }
+  void prepare(bool value) {
+    if (subscriber_->session)
+      subscriber_->session->setPreparing(&*subscriber_, value);
   }
   void refresh() { subscriber_->version = 0; }
   Option<wi::Source> owned_source() const {
