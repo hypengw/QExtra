@@ -77,7 +77,7 @@ class NetworkQueue : public QObject {
   QString fileRoot_;
   ncq::ResourceCache *resources_{};
   NetworkStatistics statistics_;
-  QHash<QUrl, QWeakPointer<NetworkTransfer>> transfers_;
+  QHash<QString, QWeakPointer<NetworkTransfer>> transfers_;
 
 public:
   void schedule();
@@ -109,8 +109,11 @@ public:
   }
   QUrl file_origin() const { return fileOrigin_; }
   QString file_root() const { return fileRoot_; }
-  auto acquire(const QUrl &url) -> ncq::ResourceRequest {
+  auto acquire(const QUrl &url, const QVariantMap &headers = {})
+      -> ncq::ResourceRequest {
     QNetworkRequest request(url);
+    for (auto it = headers.cbegin(); it != headers.cend(); ++it)
+      request.setRawHeader(it.key().toLatin1(), it.value().toString().toUtf8());
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                          QNetworkRequest::NoLessSafeRedirectPolicy);
     request.setMaximumRedirectsAllowed(10);
@@ -128,9 +131,10 @@ export class NetworkSelection {
   ncq::ResourceRequest resource_;
 
 public:
-  NetworkSelection(QQmlEngine *engine, QUrl url)
+  NetworkSelection(QQmlEngine *engine, QUrl url,
+                   const QVariantMap &headers = {})
       : url_(rstd::move(url)),
-        resource_(NetworkQueue::get(engine)->acquire(url_)) {}
+        resource_(NetworkQueue::get(engine)->acquire(url_, headers)) {}
   NetworkSelection(NetworkSelection &&) = default;
   NetworkSelection &operator=(NetworkSelection &&) = default;
   auto snapshot() const -> ncq::ResourceSnapshot {
@@ -520,8 +524,8 @@ public:
 
 auto NetworkQueue::transfer(NetworkSelection selected)
     -> QSharedPointer<NetworkTransfer> {
-  const auto url = selected.url_;
-  auto found = transfers_.value(url).toStrongRef();
+  const auto identity = selected.resource_.selection_identity();
+  auto found = transfers_.value(identity).toStrongRef();
   if (found && !found->done())
     return found;
   for (auto it = transfers_.begin(); it != transfers_.end();)
@@ -531,7 +535,7 @@ auto NetworkQueue::transfer(NetworkSelection selected)
       ++it;
   auto created =
       QSharedPointer<NetworkTransfer>::create(engine_, rstd::move(selected));
-  transfers_.insert(url, created.toWeakRef());
+  transfers_.insert(identity, created.toWeakRef());
   return created;
 }
 

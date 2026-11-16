@@ -43,6 +43,8 @@ int main(int argc, char **argv) {
   }
   if (option == "--help" || option == "-h") {
     qInfo("Usage: qextra-tests [--list | --group NAME] [animation ...]");
+    qInfo(
+        "image-network accepts --source-headers-only for request-header tests");
     return 0;
   }
   if (option.startsWith("--")) {

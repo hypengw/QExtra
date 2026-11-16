@@ -69,6 +69,7 @@ class ControlledManager : public QNetworkAccessManager {
 public:
   QList<QPointer<ControlledReply>> replies;
   QList<QUrl> started;
+  QList<QNetworkRequest> requests;
   int active{};
   int peak{};
   using QNetworkAccessManager::QNetworkAccessManager;
@@ -77,6 +78,7 @@ public:
     auto *reply = new ControlledReply(request, this);
     replies.append(reply);
     started.append(request.url());
+    requests.append(request);
     peak = qMax(peak, ++active);
     QObject::connect(reply, &QNetworkReply::finished, this,
                      [this] { --active; });
@@ -406,9 +408,115 @@ void test_queue_priority_fifo() {
   qInfo() << "network queue priority FIFO, stable promotion and shared "
              "subscriber cancellation passed";
 }
+
+void test_queue_source_headers() {
+  ControlledFactory factory;
+  QQmlEngine engine;
+  engine.setNetworkAccessManagerFactory(&factory);
+  const QUrl url(QStringLiteral("https://headers.invalid/image"));
+  const QVariantMap first{
+      {QStringLiteral("Referer"), QStringLiteral("https://first.invalid/")}};
+  const QVariantMap second{
+      {QStringLiteral("Referer"), QStringLiteral("https://second.invalid/")}};
+  auto selected = [&](const QVariantMap &headers) {
+    return new qextra::image::NetworkLoad(
+        &engine, qextra::image::NetworkSelection(&engine, url, headers),
+        nullptr);
+  };
+  auto *one = selected(first);
+  auto *same = selected(first);
+  auto *different = selected(second);
+  rstd_assert(wait_for(
+      [&] { return factory.manager && factory.manager->active == 2; }));
+  rstd_assert(factory.manager->started.size() == 2);
+  rstd_assert(factory.manager->requests[0].rawHeader("Referer") ==
+              "https://first.invalid/");
+  rstd_assert(factory.manager->requests[1].rawHeader("Referer") ==
+              "https://second.invalid/");
+  delete one;
+  rstd_assert(factory.manager->active == 2);
+  delete same;
+  rstd_assert(factory.manager->active == 1);
+  delete different;
+  rstd_assert(factory.manager->active == 0);
+  qInfo()
+      << "network queue request-header variant isolation and coalescing passed";
+}
 } // namespace
 
 namespace {
+void test_image_source_headers(const QUrl &base,
+                               QHash<QByteArray, QList<QByteArray>> &referers) {
+  Factory factory;
+  QQmlEngine engine;
+  engine.setNetworkAccessManagerFactory(&factory);
+  rstd_assert(qextra::image::set_network_cache(&engine, {base}, 300));
+  QQmlComponent component(&engine);
+  component.setData(R"(
+import QtQuick
+import QtQuick.Window
+import QExtra as QE
+Window {
+  visible: true; width: 128; height: 64
+  QE.Image { objectName: "first"; width: 64; height: 64; frameDataRequired: true }
+  QE.Image { objectName: "second"; x: 64; width: 64; height: 64; frameDataRequired: true }
+})",
+                    QUrl("qrc:/source-headers.qml"));
+  std::unique_ptr<QObject> root(component.create());
+  rstd_assert(root);
+  auto *first = root->findChild<qextra::Image *>("first");
+  auto *second = root->findChild<qextra::Image *>("second");
+  rstd_assert(first && second);
+  QImage firstPixels, secondPixels;
+  QObject::connect(
+      first, &qextra::Image::frameReady, first,
+      [&](const QUrl &, const QImage &pixels) { firstPixels = pixels; });
+  QObject::connect(
+      second, &qextra::Image::frameReady, second,
+      [&](const QUrl &, const QImage &pixels) { secondPixels = pixels; });
+  const QVariantMap red{
+      {QStringLiteral("Referer"), QStringLiteral("https://red.invalid/")}};
+  const QVariantMap blue{
+      {QStringLiteral("Referer"), QStringLiteral("https://blue.invalid/")}};
+  const auto url = base.resolved(QUrl("/source-headers"));
+  first->setSourceHeaders(red);
+  second->setSourceHeaders(blue);
+  first->setSource(url);
+  second->setSource(url);
+  auto isColor = [](const QImage &image, bool blue) {
+    if (image.isNull())
+      return false;
+    const auto pixel = image.pixelColor(0, 0);
+    return blue ? pixel.blue() > 240 && pixel.red() < 10
+                : pixel.red() > 240 && pixel.blue() < 10;
+  };
+  rstd_assert(wait_for([&] {
+    return first->status() == qextra::Image::Ready &&
+           second->status() == qextra::Image::Ready &&
+           isColor(firstPixels, false) && isColor(secondPixels, true);
+  }));
+  rstd_assert(referers["/source-headers"].size() == 2);
+  rstd_assert(referers["/source-headers"].contains("https://red.invalid/") &&
+              referers["/source-headers"].contains("https://blue.invalid/"));
+  rstd_assert(first->intrinsicSize() == QSize(1, 1));
+  rstd_assert(second->intrinsicSize() == QSize(2, 1));
+  first->setSourceHeaders(blue);
+  rstd_assert(first->intrinsicSize().isEmpty());
+  rstd_assert(wait_for([&] {
+    return first->status() == qextra::Image::Ready &&
+           isColor(firstPixels, true) && first->intrinsicSize() == QSize(2, 1);
+  }));
+  first->setRetainWhileLoading(true);
+  first->setSourceHeaders(red);
+  rstd_assert(wait_for([&] {
+    return first->status() == qextra::Image::Ready &&
+           isColor(firstPixels, false) && first->intrinsicSize() == QSize(1, 1);
+  }));
+  rstd_assert(isColor(secondPixels, true));
+  qInfo() << "Image sourceHeaders forwarding, variants and pixel/metadata "
+             "reload passed";
+}
+
 void test_gpu_cache(const QUrl &base, QHash<QByteArray, int> &hits,
                     bool &blue) {
   Factory factory;
@@ -755,8 +863,11 @@ Window {
 
 int run_image_network(int argc, char **argv) {
   QGuiApplication app(argc, argv);
+  const bool sourceHeadersOnly =
+      app.arguments().contains("--source-headers-only");
   test_queue();
   test_queue_priority_fifo();
+  test_queue_source_headers();
   QTemporaryDir files, outside;
   rstd_assert(files.isValid() && outside.isValid());
   auto write = [](QString path, QByteArray bytes) {
@@ -775,6 +886,8 @@ int run_image_network(int argc, char **argv) {
   QByteArray gif;
   QList<QByteArray> animations;
   for (int i = 1; i < argc; ++i) {
+    if (QString::fromLocal8Bit(argv[i]) == "--source-headers-only")
+      continue;
     QFile file(QString::fromLocal8Bit(argv[i]));
     rstd_assert(file.open(QIODevice::ReadOnly));
     animations.push_back(file.readAll());
@@ -783,6 +896,7 @@ int run_image_network(int argc, char **argv) {
   rstd_assert(server.listen(QHostAddress::LocalHost));
   rstd_assert(secondServer.listen(QHostAddress::LocalHost));
   QHash<QByteArray, int> hits;
+  QHash<QByteArray, QList<QByteArray>> referers;
   bool blue{};
   auto url = [&](const char *path) {
     return QUrl(QStringLiteral("http://127.0.0.1:%1%2")
@@ -802,6 +916,13 @@ int run_image_network(int argc, char **argv) {
           return;
         socket->setProperty("handled", true);
         const auto path = request.split(' ').value(1);
+        QByteArray referer;
+        for (const auto &line : request.split('\n')) {
+          const auto colon = line.indexOf(':');
+          if (colon > 0 && line.left(colon).trimmed().toLower() == "referer")
+            referer = line.mid(colon + 1).trimmed();
+        }
+        referers[path].append(referer);
         ++hits[path];
         if ((path == "/validated" || path == "/gpu-validated" ||
              path == "/gpu-shared-validated") &&
@@ -818,6 +939,9 @@ int run_image_network(int argc, char **argv) {
         body += (path == "/changing" || path == "/gpu-changing") && blue
                     ? QByteArray::fromHex("0000ff")
                     : QByteArray::fromHex("ff0000");
+        if (path == "/source-headers" && referer == "https://blue.invalid/")
+          body = QByteArray("P6\n2 1\n255\n") +
+                 QByteArray::fromHex("0000ff0000ff");
         QByteArray status("200 OK"), extra;
         if (path.startsWith("/file") || path == "/production-file" ||
             path == "/outside" || path == "/escape") {
@@ -918,9 +1042,11 @@ int run_image_network(int argc, char **argv) {
                         (path.startsWith("/gpu-") && path != "/gpu-no-store") ||
                         (path.startsWith("/all-origins-") &&
                          path != "/all-origins-no-store") ||
-                        path == "/production-file"
+                        path == "/production-file" || path == "/source-headers"
                     ? "Cache-Control: public, max-age=3600\r\n"
                     : "Cache-Control: no-store\r\n";
+          if (path == "/source-headers")
+            extra += "Vary: Referer\r\n";
           socket->write("HTTP/1.1 " + status + "\r\n" + extra +
                         "Content-Length: " + QByteArray::number(body.size()) +
                         "\r\nConnection: close\r\n\r\n" + body);
@@ -933,6 +1059,9 @@ int run_image_network(int argc, char **argv) {
                    [&] { accept(server); });
   QObject::connect(&secondServer, &QTcpServer::newConnection, &secondServer,
                    [&] { accept(secondServer); });
+  test_image_source_headers(url(""), referers);
+  if (sourceHeadersOnly)
+    return 0;
   test_production_cache(
       url(""),
       QUrl(

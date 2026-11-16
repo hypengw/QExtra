@@ -142,6 +142,7 @@ public:
   Image *item;
   QPointer<ImageClock> clock;
   QUrl source;
+  QVariantMap sourceHeaders;
   QUrl networkUrl;
   image::NetworkLoad *download{};
   Option<image::NetworkSelection> networkSelection;
@@ -356,6 +357,21 @@ public:
     cancelRequest(keepImage);
     load(keepImage);
   }
+  bool resetSourceIdentity() {
+    const bool changedIntrinsic = !intrinsic.isEmpty();
+    intrinsic = QSize(0, 0);
+    if (item->isComponentComplete())
+      independentControl = false;
+    networkInput = None();
+    networkFile = None();
+    networkIdentity.clear();
+    networkSnapshot = {};
+    resumeRemaining = None();
+    if (item->isComponentComplete())
+      seekFrame = 0;
+    frameCount = 0;
+    return changedIntrinsic;
+  }
   void load(bool keepImage = false) {
     // A new request replaces content invalidated before this load began.
     invalidated.exchange(false, rstd::sync::atomic::Ordering::AcqRel);
@@ -444,7 +460,8 @@ public:
       if (cache && !frameDataRequired &&
           (item->width() <= 0 || item->height() <= 0)) {
         if (auto *engine = qmlEngine(item)) {
-          networkSelection = Some(image::NetworkSelection(engine, networkUrl));
+          networkSelection =
+              Some(image::NetworkSelection(engine, networkUrl, sourceHeaders));
           auto geometry =
               networkSelection->display(decodeSize(), contextId, seekFrame);
           if (geometry) {
@@ -690,7 +707,8 @@ public:
           return;
         }
         if (!networkSelection)
-          networkSelection = Some(image::NetworkSelection(engine, networkUrl));
+          networkSelection =
+              Some(image::NetworkSelection(engine, networkUrl, sourceHeaders));
         if (cache) {
           if (!frameDataRequired && (active() || preparing()) &&
               !displayAttempted) {
@@ -1220,19 +1238,8 @@ void Image::setSource(const QUrl &value) {
   d->cancelRequest();
   const auto before = d->generation;
   auto valid = [&] { return guard && guard->d->generation == before; };
-  const bool changedIntrinsic = !d->intrinsic.isEmpty();
-  d->intrinsic = QSize(0, 0);
   d->source = value;
-  if (isComponentComplete())
-    d->independentControl = false;
-  d->networkInput = None();
-  d->networkFile = None();
-  d->networkIdentity.clear();
-  d->networkSnapshot = {};
-  d->resumeRemaining = None();
-  if (isComponentComplete())
-    d->seekFrame = 0;
-  d->frameCount = 0;
+  const bool changedIntrinsic = d->resetSourceIdentity();
   if (changedIntrinsic) {
     emit intrinsicSizeChanged();
     if (!valid())
@@ -1246,6 +1253,28 @@ void Image::setSource(const QUrl &value) {
     d->load();
 }
 Image::Status Image::status() const { return d->status; }
+QVariantMap Image::sourceHeaders() const { return d->sourceHeaders; }
+void Image::setSourceHeaders(const QVariantMap &value) {
+  if (d->sourceHeaders == value)
+    return;
+  QPointer<Image> guard(this);
+  d->cancelRequest();
+  const auto before = d->generation;
+  auto valid = [&] { return guard && guard->d->generation == before; };
+  d->sourceHeaders = value;
+  const bool changedIntrinsic = d->resetSourceIdentity();
+  if (changedIntrinsic) {
+    emit intrinsicSizeChanged();
+    if (!valid())
+      return;
+  }
+  emit sourceHeadersChanged();
+  if (!valid())
+    return;
+  emit frameCountChanged();
+  if (valid())
+    d->load();
+}
 bool Image::hasFrame() const { return d->hasFrame(); }
 bool Image::frameDataRequired() const { return d->frameDataRequired; }
 void Image::setFrameDataRequired(bool value) {
