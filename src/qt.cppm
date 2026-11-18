@@ -219,6 +219,7 @@ export using ::QVersionNumber;
 
 export using ::QGuiApplication;
 export using ::QSurfaceFormat;
+export using ::QWindow;
 export using ::QWindowList;
 export using ::QClipboard;
 export using ::QImageReader;
@@ -293,6 +294,7 @@ using Qt::CaseInsensitive;
 using Qt::CaseSensitive;
 using Qt::ConnectionType;
 using Qt::DirectConnection;
+using Qt::DisplayRole;
 using Qt::makePropertyBinding;
 using Qt::QueuedConnection;
 using Qt::PreciseTimer;
