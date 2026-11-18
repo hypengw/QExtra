@@ -36,6 +36,7 @@ module;
 #include <QtCore/QRegularExpression>
 #include <QtCore/QRunnable>
 #include <QtCore/QSettings>
+#include <QtCore/QSharedPointer>
 #include <QtCore/QSequentialIterable>
 #include <QtCore/QSortFilterProxyModel>
 #include <QtCore/QStandardPaths>
@@ -171,6 +172,7 @@ export using ::QLibrary;
 export using ::QVector2D;
 export using ::QVariant;
 export using ::QPointer;
+export using ::QSharedPointer;
 export using ::QVariantList;
 export using ::QStringList;
 export using ::QByteArray;

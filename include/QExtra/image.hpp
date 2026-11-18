@@ -2,10 +2,13 @@
 
 #include <QtCore/QUrl>
 #include <QtCore/QVariantMap>
-#include <QtGui/QImage>
-#include <QtQml/qqmlregistration.h>
+#include <QtQmlIntegration/qqmlintegration.h>
 #include <QtQuick/QQuickItem>
-#include <QtQuick/QQuickWindow>
+
+QT_FORWARD_DECLARE_CLASS(QImage)
+QT_FORWARD_DECLARE_CLASS(QQuickWindow)
+Q_MOC_INCLUDE("QtGui/QImage")
+Q_MOC_INCLUDE("QtQuick/QQuickWindow")
 
 namespace qextra {
 class ImagePrivate;
