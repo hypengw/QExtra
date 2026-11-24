@@ -1,7 +1,10 @@
 #include <format>
 #include <gtest/gtest.h>
 
-#include "kstore/qt/gadget_model.hpp"
+#include "QExtra/macro_qt.hpp"
+
+import qextra;
+import rstd.cppstd;
 
 struct Model {
     Q_GADGET

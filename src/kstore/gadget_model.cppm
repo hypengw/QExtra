@@ -1,68 +1,31 @@
-module;
-#include "kstore/qt/gadget_model.hpp"
+export module qextra:kstore.gadget_model;
+import :kstore.meta_list_model;
+import qextra.qt;
+import rstd.cppstd;
 
-module qextra:kstore.gadget_model;
-
-extern "C++" {
-
-auto kstore::readOnGadget(const QVariant& obj, const char* name) -> QVariant {
-    if (auto meta = obj.metaType().metaObject()) {
-        if (auto p = meta->property(meta->indexOfProperty(name)); p.isValid()) {
-            return p.readOnGadget(obj.constData());
-        }
-    }
-    return {};
-}
-
-namespace kstore
+export namespace kstore
 {
 
-QGadgetListModel::QGadgetListModel(QListInterface* oper, QObject* parent)
-    : QMetaListModel(oper, parent) {}
-QVariant QGadgetListModel::data(const QModelIndex& index, int role) const {
-    if (! index.isValid() || index.row() < 0 ||
-        index.row() >= static_cast<qint32>(m_oper->rawSize()))
-        return {};
+template<typename T>
+concept cp_is_gadget = requires() { typename T::QtGadgetHelper; };
+template<typename T>
+concept cp_is_qobject = std::derived_from<T, QObject>;
 
-    if (role == QMetaListModel::SelectedRole) return isSelected(index.row());
-
-    if (auto prop = this->propertyOfRole(role); prop) {
-        return prop.value().readOnGadget(m_oper->rawAt(index.row()));
-    }
-
-    if (this->options() & kstore::QMetaRoleNames::WithMethod) {
-        if (auto method = this->methodOfRole(role); method) {
-            auto ret_type = method->returnMetaType();
-            auto ret_data = ret_type.create();
-
-            QTemplatedMetaMethodReturnArgument<void> ret_arg = {
-                { .metaType = ret_type.iface(), .name = nullptr, .data = ret_data }
-            };
-
-            method.value().invokeOnGadget(m_oper->rawAt(index.row()), ret_arg);
-            QVariant ret { ret_type, ret_data };
-            ret_type.destroy(ret_data);
-            return ret;
+auto readOnGadget(const QVariant&, const char*) -> QVariant;
+class QGadgetListModel : public QMetaListModel {
+public:
+    template<typename T>
+    QGadgetListModel(T* oper, QObject* parent = nullptr, int opts = 0)
+        : QGadgetListModel(static_cast<QListInterface*>(oper), parent) {
+        // must use static member func here, as virtual ptr is not inited here
+        if (auto meta = oper->T::rawItemMeta()) {
+            updateRoleNames(*meta, this, opts);
         }
     }
-    return {};
+    explicit QGadgetListModel(QListInterface* oper, QObject* parent = nullptr);
+
+    QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override;
+    bool setData(const QModelIndex& index, const QVariant& value, int role = Qt::EditRole) override;
 };
-bool QGadgetListModel::setData(const QModelIndex& index, const QVariant& value, int role) {
-    const auto row = index.row();
-    if (row >= 0 && row < (qint32)m_oper->rawSize()) {
-        if (role == QMetaListModel::SelectedRole) {
-            return setSelected(row, value.toBool());
-        }
 
-        if (auto prop = this->propertyOfRole(role); prop) {
-            bool changed = prop.value().writeOnGadget(m_oper->rawAt(index.row()), value);
-            if (changed) {
-                dataChanged(index, index, { role });
-            }
-            return changed;
-        }
-    }
-    return false;
-}
 } // namespace kstore
-}

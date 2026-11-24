@@ -1,16 +1,13 @@
-#pragma once
+module;
+#include <QtCore/qassert.h>
 
-#include <span>
-#include <functional>
-#include <map>
-#include <memory>
-#include <vector>
+export module qextra:kstore.share_store;
+import :kstore.item_trait;
+import :kstore.rc;
+import :kstore.subscription;
+import rstd.cppstd;
 
-#include "kstore/item_trait.hpp"
-#include "kstore/rc.hpp"
-#include "kstore/subscription.hpp"
-
-namespace kstore
+export namespace kstore
 {
 
 ///
@@ -34,7 +31,9 @@ template<typename T>
 concept storeable_item = hashable_item<T> && requires(T t) { typename ItemTrait<T>::store_type; } &&
                          storeable<typename ItemTrait<T>::store_type, T>;
 
-template<typename T, typename Allocator = std::allocator<T>, typename TItemExtend = void,
+template<typename T,
+         typename Allocator   = std::allocator<T>,
+         typename TItemExtend = void,
          typename InnerCustom = std::int64_t>
 struct ShareStore;
 
@@ -145,10 +144,15 @@ struct ShareStore {
         Inner(Allocator alloc): map(alloc), callbacks(alloc), serial(0) {}
         ~Inner() {}
 
-        std::unordered_map<key_type, inner_item_type, std::hash<key_type>, std::equal_to<key_type>,
+        std::unordered_map<key_type,
+                           inner_item_type,
+                           std::hash<key_type>,
+                           std::equal_to<key_type>,
                            rebind_alloc<std::pair<const key_type, inner_item_type>>>
             map;
-        std::map<handle_type, callback_type, std::less<>,
+        std::map<handle_type,
+                 callback_type,
+                 std::less<>,
                  rebind_alloc<std::pair<const handle_type, callback_type>>>
                     callbacks;
         handle_type serial;
@@ -190,7 +194,7 @@ struct ShareStore {
         auto key = ItemTrait<T>::key(item);
         if (auto it = inner->map.find(key); it != inner->map.end()) {
             if constexpr (requires { item == it->second.item; }) {
-                changed = !(it->second.item == item);
+                changed = ! (it->second.item == item);
             } else {
                 changed = true;
             }
@@ -243,7 +247,9 @@ struct ShareStore {
                 }
             }
         });
-        return Subscription([store = *this, handle]() mutable { store.store_unreg_notify(handle); });
+        return Subscription([store = *this, handle]() mutable {
+            store.store_unreg_notify(handle);
+        });
     }
 
     // extend

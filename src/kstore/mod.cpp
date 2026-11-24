@@ -1,9 +1,0 @@
-module qextra;
-import :kstore;
-import :kstore.gadget_model;
-import :kstore.meta_list_model;
-import :kstore.meta_role;
-import :kstore.meta_utils;
-import :kstore.moc;
-import :kstore.qtable_proxy_model;
-import :kstore.qunion_list_model;

@@ -1,5 +1,6 @@
 module;
 #include <QtCore/QAbstractListModel>
+#include <QtCore/QAbstractProxyModel>
 #include <QtCore/QAssociativeIterable>
 #include <QtCore/QChar>
 #include <QtCore/QCommandLineParser>
@@ -36,6 +37,7 @@ module;
 #include <QtCore/QRegularExpression>
 #include <QtCore/QRunnable>
 #include <QtCore/QSettings>
+#include <QtCore/QSet>
 #include <QtCore/QSharedPointer>
 #include <QtCore/QSequentialIterable>
 #include <QtCore/QSortFilterProxyModel>
@@ -118,6 +120,8 @@ export using ::QElapsedTimer;
 export using ::QTemporaryDir;
 export using ::QStringListModel;
 export using ::QMetaProperty;
+export using ::QMetaMethod;
+export using ::QTemplatedMetaMethodReturnArgument;
 export using ::QSequentialIterable;
 export using ::QAssociativeIterable;
 export using ::QNetworkAccessManager;
@@ -174,6 +178,8 @@ export using ::QVariant;
 export using ::QPointer;
 export using ::QSharedPointer;
 export using ::QVariantList;
+export using ::QVariantHash;
+export using ::QSet;
 export using ::QStringList;
 export using ::QByteArray;
 export using ::QByteArrayView;
@@ -284,10 +290,13 @@ export using ::QProperty;
 
 export using ::QVariantMap;
 export using ::QAbstractItemModel;
+export using ::QAbstractProxyModel;
+export using ::QPersistentModelIndex;
 export using ::QSortFilterProxyModel;
 export using ::QAbstractListModel;
 export using ::QIdentityProxyModel;
 export using ::QModelIndex;
+export using ::QModelIndexList;
 
 export namespace Qt {
 using Qt::AutoConnection;
@@ -297,6 +306,14 @@ using Qt::CaseSensitive;
 using Qt::ConnectionType;
 using Qt::DirectConnection;
 using Qt::DisplayRole;
+using Qt::EditRole;
+using Qt::DropActions;
+using Qt::ItemFlags;
+using Qt::ItemIsDragEnabled;
+using Qt::ItemIsDropEnabled;
+using Qt::ItemIsEditable;
+using Qt::MoveAction;
+using Qt::Orientation;
 using Qt::makePropertyBinding;
 using Qt::QueuedConnection;
 using Qt::PreciseTimer;

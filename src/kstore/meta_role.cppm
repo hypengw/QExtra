@@ -1,93 +1,54 @@
 module;
-#include "kstore/qt/meta_role.hpp"
+#include "QExtra/macro_qt.hpp"
 
-module qextra:kstore.meta_role;
+#ifdef Q_MOC_RUN
+#include "kstore/meta_role.moc"
+#endif
 
-extern "C++" {
+export module qextra:kstore.meta_role;
+import qextra.qt;
+import rstd.cppstd;
 
-namespace kstore
+export namespace kstore
 {
 
-namespace detail
-{
-void update_role_names(QHash<int, QByteArray>& role_names, const QMetaObject& meta) {
-    role_names.clear();
+struct QEmpty {
+    Q_GADGET
+};
 
-    auto roleIndex = Qt::UserRole + 1;
-    for (auto i = 0; i < meta.propertyCount(); i++) {
-        auto prop = meta.property(i);
-        role_names.insert(roleIndex, prop.name());
-        ++roleIndex;
-    }
-}
-} // namespace detail
+class QMetaRoleNames {
+public:
+    QMetaRoleNames();
 
-QMetaRoleNames::QMetaRoleNames(): m_meta(QEmpty::staticMetaObject), m_opts(0) {}
+    auto meta() const -> const QMetaObject&;
+    auto roleOf(QByteArrayView name) const -> int;
 
-auto QMetaRoleNames::options() const -> int { return m_opts; }
-auto QMetaRoleNames::meta() const -> const QMetaObject& { return m_meta; }
-auto QMetaRoleNames::roleOf(QByteArrayView name) const -> int {
-    auto& map = nameRolesRef();
-    if (auto it = map.find(name); it != map.end()) {
-        auto out = it.value();
-        return out;
-    }
-    return -1;
-}
-void QMetaRoleNames::updateRoleNames(const QMetaObject& meta, QAbstractItemModel* model, int opts) {
-    if (model) model->layoutAboutToBeChanged();
-
-    m_opts = opts;
-    m_meta = meta;
+    enum Option
     {
-        m_role_names.clear();
-        m_role_infos.clear();
-        m_name_roles.clear();
+        WithMethod = 1,
+    };
+    auto options() const -> int;
 
-        auto roleIndex = Qt::UserRole + 1;
-        for (auto i = 0; i < meta.propertyCount(); i++) {
-            auto       prop = meta.property(i);
-            const auto name = prop.name();
-            m_role_names.insert(roleIndex, name);
-            m_name_roles.insert(name, roleIndex);
-            m_role_infos.insert(roleIndex,
-                                RoleInfo { .name = name, .index = i, .is_method = false });
-            ++roleIndex;
-        }
+    struct RoleInfo {
+        QByteArray name;
+        int        index;
+        bool       is_method;
+    };
 
-        if (m_opts & WithMethod) {
-            for (auto i = 0; i < meta.methodCount(); i++) {
-                auto       method = meta.method(i);
-                const auto name   = method.name();
-                m_role_names.insert(roleIndex, name);
-                m_name_roles.insert(name, roleIndex);
-                m_role_infos.insert(roleIndex,
-                                    RoleInfo { .name = name, .index = i, .is_method = true });
-                ++roleIndex;
-            }
-        }
-    }
+protected:
+    void updateRoleNames(const QMetaObject& meta, QAbstractItemModel* model, int opts);
+    auto roleNamesRef() const -> const QHash<int, QByteArray>&;
+    auto roleInfosRef() const -> const QHash<int, RoleInfo>&;
+    auto nameRolesRef() const -> const QHash<QByteArray, int>&;
+    auto propertyOfRole(int role) const -> std::optional<QMetaProperty>;
+    auto methodOfRole(int role) const -> std::optional<QMetaMethod>;
 
-    if (model) model->layoutChanged();
-}
-auto QMetaRoleNames::roleNamesRef() const -> const QHash<int, QByteArray>& { return m_role_names; }
-auto QMetaRoleNames::nameRolesRef() const -> const QHash<QByteArray, int>& { return m_name_roles; }
-auto QMetaRoleNames::propertyOfRole(int role) const -> std::optional<QMetaProperty> {
-    if (auto it = m_role_infos.constFind(role); it != m_role_infos.end()) {
-        if (! it->is_method) {
-            return meta().property(it->index);
-        }
-    }
-    return std::nullopt;
-}
-auto QMetaRoleNames::methodOfRole(int role) const -> std::optional<QMetaMethod> {
-    if (auto it = m_role_infos.constFind(role); it != m_role_infos.end()) {
-        if (it->is_method) {
-            return meta().method(it->index);
-        }
-    }
-    return std::nullopt;
-}
+private:
+    QHash<int, RoleInfo>   m_role_infos;
+    QHash<int, QByteArray> m_role_names;
+    QHash<QByteArray, int> m_name_roles;
+    QMetaObject            m_meta;
+    int                    m_opts;
+};
 
 } // namespace kstore
-}

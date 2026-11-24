@@ -1,23 +1,12 @@
-module;
-#include "kstore/qt/gadget_model.hpp"
-#include "kstore/item_trait.hpp"
-#include "kstore/share_store.hpp"
-#include "kstore/qt/meta_utils.hpp"
-#include "kstore/qt/qtable_proxy_model.hpp"
 export module qextra:kstore;
-
-export namespace kstore
-{
-using kstore::QGadgetListModel;
-using kstore::QMetaListModelCRTP;
-using kstore::QMetaListModel;
-using kstore::QMetaRoleNames;
-using kstore::ItemTrait;
-using kstore::ShareStore;
-using kstore::ListStoreType;
-using kstore::QListInterface;
-using kstore::QTableProxyModel;
-using kstore::qvariant_to_josn;
-using kstore::qvariant_from_josn;
-
-}
+export import :kstore.item_trait;
+export import :kstore.rc;
+export import :kstore.subscription;
+export import :kstore.share_store;
+export import :kstore.list_impl;
+export import :kstore.meta_role;
+export import :kstore.meta_list_model;
+export import :kstore.gadget_model;
+export import :kstore.meta_utils;
+export import :kstore.qtable_proxy_model;
+export import :kstore.qunion_list_model;

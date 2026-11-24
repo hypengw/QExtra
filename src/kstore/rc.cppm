@@ -1,8 +1,7 @@
-#pragma once
+export module qextra:kstore.rc;
+import rstd.cppstd;
 
-#include <cstdint>
-
-namespace kstore
+export namespace kstore
 {
 template<typename T>
 class Rc {
@@ -34,7 +33,7 @@ public:
         return rc;
     }
 
-    operator bool() const noexcept { return m_inner != nullptr; }
+                   operator bool() const noexcept { return m_inner != nullptr; }
     T*             operator->() const noexcept { return m_inner->ptr; }
     constexpr bool operator==(const Rc& o) const { return m_inner == o.m_inner; }
 

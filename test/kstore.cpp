@@ -1,10 +1,8 @@
-#include "kstore/qt/gadget_model.hpp"
-#include "kstore/qt/qtable_proxy_model.hpp"
-#include "kstore/qt/qunion_list_model.hpp"
 #include "tests.hpp"
 #include <rstd/macro.hpp>
 
 import qextra;
+import rstd.cppstd;
 
 struct StoreValue {
   int id;
@@ -100,7 +98,7 @@ int run_kstore(int argc, char **argv) {
   rstd_assert(!query.isCurrentRequest(revision));
   kstore::QMetaRoleNames roles;
   rstd_assert(roles.options() == 0);
-  rstd_assert(roles.meta().className() == QStringLiteral("kstore::QEmpty"));
+  rstd_assert(roles.meta().className() == QString::fromUtf8("kstore::QEmpty"));
 
   QStringListModel source(QStringList{"one", "two"});
   kstore::QTableProxyModel table;
@@ -118,7 +116,7 @@ int run_kstore(int argc, char **argv) {
   rstd_assert(combined.rowCount() == 2);
   rstd_assert(combined.metaObject()->indexOfProperty("sources") >= 0);
 
-  const QVariant value(QStringLiteral("value"));
+  const QVariant value(QString::fromUtf8("value"));
   auto json = kstore::qvariant_to_josn(value);
   rstd_assert(kstore::qvariant_from_josn(value.metaType(), json) == value);
   rstd_assert(!kstore::readOnGadget(QVariant(), "missing").isValid());

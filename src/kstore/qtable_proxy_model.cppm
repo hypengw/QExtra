@@ -1,183 +1,76 @@
 module;
-#include "kstore/qt/qtable_proxy_model.hpp"
+#include "QExtra/macro_qt.hpp"
 
-module qextra:kstore.qtable_proxy_model;
+#ifdef Q_MOC_RUN
+#include "kstore/qtable_proxy_model.moc"
+#endif
 
-extern "C++" {
+export module qextra:kstore.qtable_proxy_model;
+import qextra.qt;
+import rstd.cppstd;
 
-namespace kstore
+export namespace kstore
 {
-QTableProxyModel::QTableProxyModel(QObject* parent): QAbstractProxyModel(parent) {
-    connect(this, &QTableProxyModel::columnNamesChanged, this, &QTableProxyModel::syncColumns);
-    connect(this, &QTableProxyModel::sourceModelChanged, this, &QTableProxyModel::syncColumns);
-}
 
-void QTableProxyModel::syncColumns() {
-    if (! sourceModel()) return;
-    beginResetModel();
-    m_headers.clear();
-    auto        roles = sourceModel()->roleNames();
-    const auto& r     = roles.asKeyValueRange();
-    for (auto i = 0; i < m_column_names.size(); i++) {
-        auto& col = m_column_names[i];
-        auto  it  = std::find_if(r.begin(), r.end(), [&col](auto v) {
-            return v.second == col;
-        });
-        if (it != r.end()) {
-            m_headers.push_back({ .role = it->first, .propname = it->second });
-        }
-    }
-    endResetModel();
-}
+class QTableProxyModel : public QAbstractProxyModel {
+    Q_OBJECT
 
-auto QTableProxyModel::columnNames() const -> const QStringList { return m_column_names; }
-void QTableProxyModel::setColumnNames(const QStringList& v) {
-    if (v != m_column_names) {
-        m_column_names = v;
-        columnNamesChanged();
-    }
-}
+    Q_PROPERTY(QStringList columnNames READ columnNames WRITE setColumnNames NOTIFY
+                   columnNamesChanged FINAL)
+public:
+    QTableProxyModel(QObject* parent = nullptr);
 
-auto QTableProxyModel::mapFromSource(const QModelIndex& sourceIndex) const -> QModelIndex {
-    return this->index(sourceIndex.row(), sourceIndex.column(), {});
-}
-auto QTableProxyModel::mapToSource(const QModelIndex& sourceIndex) const -> QModelIndex {
-    return sourceModel()->index(sourceIndex.row(), 0);
-}
+    auto          columnNames() const -> const QStringList;
+    void          setColumnNames(const QStringList&);
+    Q_SIGNAL void columnNamesChanged();
 
-void QTableProxyModel::setSourceModel(QAbstractItemModel* sourceModel) {
-    QAbstractProxyModel::setSourceModel(sourceModel);
+    auto mapFromSource(const QModelIndex& sourceIndex) const -> QModelIndex override;
+    auto mapToSource(const QModelIndex& sourceIndex) const -> QModelIndex override;
 
-    if (sourceModel) {
-        for (const QMetaObject::Connection& connection : std::as_const(m_source_connections))
-            disconnect(connection);
-    }
-    m_source_connections = std::array<QMetaObject::Connection, 18> {
-        connect(sourceModel,
-                &QAbstractItemModel::dataChanged,
-                this,
-                &QTableProxyModel::sourceDataChanged),
-        connect(sourceModel,
-                &QAbstractItemModel::headerDataChanged,
-                this,
-                &QTableProxyModel::sourceHeaderDataChanged),
-        connect(sourceModel,
-                &QAbstractItemModel::rowsAboutToBeInserted,
-                this,
-                &QTableProxyModel::sourceRowsAboutToBeInserted),
-        connect(sourceModel,
-                &QAbstractItemModel::rowsInserted,
-                this,
-                &QTableProxyModel::sourceRowsInserted),
-        connect(sourceModel,
-                &QAbstractItemModel::columnsAboutToBeInserted,
-                this,
-                &QTableProxyModel::sourceColumnsAboutToBeInserted),
-        connect(sourceModel,
-                &QAbstractItemModel::columnsInserted,
-                this,
-                &QTableProxyModel::sourceColumnsInserted),
-        connect(sourceModel,
-                &QAbstractItemModel::rowsAboutToBeRemoved,
-                this,
-                &QTableProxyModel::sourceRowsAboutToBeRemoved),
-        connect(sourceModel,
-                &QAbstractItemModel::rowsRemoved,
-                this,
-                &QTableProxyModel::sourceRowsRemoved),
-        connect(sourceModel,
-                &QAbstractItemModel::columnsAboutToBeRemoved,
-                this,
-                &QTableProxyModel::sourceColumnsAboutToBeRemoved),
-        connect(sourceModel,
-                &QAbstractItemModel::columnsRemoved,
-                this,
-                &QTableProxyModel::sourceColumnsRemoved),
-        connect(sourceModel,
-                &QAbstractItemModel::rowsAboutToBeMoved,
-                this,
-                &QTableProxyModel::sourceRowsAboutToBeMoved),
-        connect(
-            sourceModel, &QAbstractItemModel::rowsMoved, this, &QTableProxyModel::sourceRowsMoved),
-        connect(sourceModel,
-                &QAbstractItemModel::columnsAboutToBeMoved,
-                this,
-                &QTableProxyModel::sourceColumnsAboutToBeMoved),
-        connect(sourceModel,
-                &QAbstractItemModel::columnsMoved,
-                this,
-                &QTableProxyModel::sourceColumnsMoved),
-        connect(sourceModel,
-                &QAbstractItemModel::layoutAboutToBeChanged,
-                this,
-                &QTableProxyModel::sourceLayoutAboutToBeChanged),
-        connect(sourceModel,
-                &QAbstractItemModel::layoutChanged,
-                this,
-                &QTableProxyModel::sourceLayoutChanged),
-        connect(sourceModel,
-                &QAbstractItemModel::modelAboutToBeReset,
-                this,
-                &QTableProxyModel::sourceAboutToBeReset),
-        connect(sourceModel, &QAbstractItemModel::modelReset, this, &QTableProxyModel::sourceReset)
+    void setSourceModel(QAbstractItemModel* sourceModel) override;
+
+    auto data(const QModelIndex& proxyIndex, int role = Qt::DisplayRole) const -> QVariant override;
+    auto headerData(int section, Qt::Orientation orientation, int role = Qt::DisplayRole) const
+        -> QVariant override;
+    auto roleNames() const -> QHash<int, QByteArray> override;
+    auto columnCount(const QModelIndex& parent = QModelIndex()) const -> int override;
+    auto rowCount(const QModelIndex& parent = QModelIndex()) const -> int override;
+
+    auto parent(const QModelIndex& child) const -> QModelIndex override;
+    auto index(int row, int column, const QModelIndex& parent) const -> QModelIndex override;
+
+private:
+    Q_SLOT void syncColumns();
+
+    Q_SLOT void sourceDataChanged();
+    Q_SLOT void sourceHeaderDataChanged();
+    Q_SLOT void sourceRowsAboutToBeInserted();
+    Q_SLOT void sourceRowsInserted();
+    Q_SLOT void sourceColumnsAboutToBeInserted();
+    Q_SLOT void sourceColumnsInserted();
+    Q_SLOT void sourceRowsAboutToBeRemoved();
+    Q_SLOT void sourceRowsRemoved();
+    Q_SLOT void sourceColumnsAboutToBeRemoved();
+    Q_SLOT void sourceColumnsRemoved();
+    Q_SLOT void sourceRowsAboutToBeMoved();
+    Q_SLOT void sourceRowsMoved();
+    Q_SLOT void sourceColumnsAboutToBeMoved();
+    Q_SLOT void sourceColumnsMoved();
+    Q_SLOT void sourceLayoutAboutToBeChanged(const QList<QPersistentModelIndex>&  sourceParents,
+                                             QAbstractItemModel::LayoutChangeHint hint);
+    Q_SLOT void sourceLayoutChanged(const QList<QPersistentModelIndex>&  sourceParents,
+                                    QAbstractItemModel::LayoutChangeHint hint);
+    Q_SLOT void sourceAboutToBeReset();
+    Q_SLOT void sourceReset();
+    struct HeaderData {
+        int     role;
+        QString propname;
     };
-}
+    std::vector<HeaderData> m_headers;
+    QHash<int, QByteArray>  m_rolenames;
+    QStringList             m_column_names;
 
-auto QTableProxyModel::data(const QModelIndex& proxyIndex, int role) const -> QVariant {
-    if (proxyIndex.isValid()) {
-        auto column = proxyIndex.column();
-        if ((std::size_t)column < m_headers.size()) {
-            role = m_headers[column].role;
-        }
-    }
-    return QAbstractProxyModel::data(proxyIndex, role);
-}
-auto QTableProxyModel::headerData(int section, Qt::Orientation orientation, int role) const
-    -> QVariant {
-    if (section > 0 && (std::size_t)section < m_headers.size()) {
-        auto role = m_headers[section];
-        return role.propname;
-    }
-
-    return QAbstractProxyModel::headerData(section, orientation, role);
-}
-auto QTableProxyModel::roleNames() const -> QHash<int, QByteArray> {
-    return { { Qt::DisplayRole, "display" } };
-}
-auto QTableProxyModel::columnCount(const QModelIndex&) const -> int { return m_headers.size(); }
-auto QTableProxyModel::rowCount(const QModelIndex&) const -> int {
-    auto s   = sourceModel();
-    auto row = 0;
-    if (s) row = s->rowCount();
-    return row;
-}
-auto QTableProxyModel::parent(const QModelIndex&) const -> QModelIndex { return QModelIndex {}; }
-auto QTableProxyModel::index(int row, int column, const QModelIndex&) const -> QModelIndex {
-    return QAbstractProxyModel::createIndex(row, column, nullptr);
-}
-
-void QTableProxyModel::sourceDataChanged() {}
-void QTableProxyModel::sourceHeaderDataChanged() {}
-void QTableProxyModel::sourceRowsAboutToBeInserted() {}
-void QTableProxyModel::sourceRowsInserted() {}
-void QTableProxyModel::sourceColumnsAboutToBeInserted() {}
-void QTableProxyModel::sourceColumnsInserted() {}
-void QTableProxyModel::sourceRowsAboutToBeRemoved() {}
-void QTableProxyModel::sourceRowsRemoved() {}
-void QTableProxyModel::sourceColumnsAboutToBeRemoved() {}
-void QTableProxyModel::sourceColumnsRemoved() {}
-void QTableProxyModel::sourceRowsAboutToBeMoved() {}
-void QTableProxyModel::sourceRowsMoved() {}
-void QTableProxyModel::sourceColumnsAboutToBeMoved() {}
-void QTableProxyModel::sourceColumnsMoved() {}
-void QTableProxyModel::sourceLayoutAboutToBeChanged(const QList<QPersistentModelIndex>&  sourceParents,
-                                           QAbstractItemModel::LayoutChangeHint hint) {}
-void QTableProxyModel::sourceLayoutChanged(const QList<QPersistentModelIndex>&  sourceParents,
-                                           QAbstractItemModel::LayoutChangeHint hint) {
-
-                                           }
-void QTableProxyModel::sourceAboutToBeReset() { beginResetModel(); }
-void QTableProxyModel::sourceReset() { endResetModel(); }
+    std::array<QMetaObject::Connection, 18> m_source_connections;
+};
 
 } // namespace kstore
-}

@@ -1,18 +1,16 @@
-#pragma once
+export module qextra:kstore.subscription;
+import rstd.cppstd;
 
-#include <functional>
-#include <utility>
-
-namespace kstore {
+export namespace kstore
+{
 
 class Subscription {
 public:
     Subscription() = default;
     explicit Subscription(std::function<void()> release): m_release(std::move(release)) {}
-    Subscription(const Subscription&) = delete;
+    Subscription(const Subscription&)            = delete;
     Subscription& operator=(const Subscription&) = delete;
-    Subscription(Subscription&& other) noexcept
-        : m_release(std::exchange(other.m_release, {})) {}
+    Subscription(Subscription&& other) noexcept: m_release(std::exchange(other.m_release, {})) {}
     Subscription& operator=(Subscription&& other) noexcept {
         if (this != &other) {
             reset();

@@ -1,11 +1,7 @@
-#pragma once
+export module qextra:kstore.item_trait;
+import rstd.cppstd;
 
-#include <cstdint>
-#include <cstddef>
-#include <utility>
-#include <system_error>
-
-namespace kstore
+export namespace kstore
 {
 
 using i32   = std::int32_t;

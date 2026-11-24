@@ -1,17 +1,10 @@
-#pragma once
+export module qextra:kstore.list_impl;
+import :kstore.item_trait;
+import :kstore.share_store;
+import qextra.qt;
+import rstd.cppstd;
 
-#include <ranges>
-#include <vector>
-#include <unordered_set>
-#include <unordered_map>
-#include <set>
-
-#include <QtCore/QAbstractItemModel>
-#include <QtCore/QPointer>
-#include "kstore/item_trait.hpp"
-#include "kstore/share_store.hpp"
-
-namespace kstore
+export namespace kstore
 {
 enum class ListStoreType
 {
@@ -49,7 +42,10 @@ template<typename Allocator, typename T>
 using rebind_alloc = typename std::allocator_traits<Allocator>::template rebind_alloc<T>;
 
 template<typename K, typename V, typename Allocator>
-using HashMap = std::unordered_map<K, V, std::hash<K>, std::equal_to<K>,
+using HashMap = std::unordered_map<K,
+                                   V,
+                                   std::hash<K>,
+                                   std::equal_to<K>,
                                    rebind_alloc<Allocator, std::pair<const K, V>>>;
 
 template<typename T, typename Allocator>
@@ -157,7 +153,7 @@ public:
 protected:
     template<std::ranges::sized_range U>
     auto _insert_len(U&& range) {
-        auto view = std::views::transform(range, [this](auto& el) -> usize {
+        auto view = std::ranges::views::transform(range, [this](auto& el) -> usize {
             return m_map.contains(ItemTrait<T>::key(el)) ? 0 : 1;
         });
         return std::accumulate(view.begin(), view.end(), 0);
@@ -235,7 +231,10 @@ public:
     using allocator_type = Allocator;
     using key_type       = ItemTrait<T>::key_type;
     using container_type =
-        std::unordered_map<key_type, T, std::hash<key_type>, std::equal_to<key_type>,
+        std::unordered_map<key_type,
+                           T,
+                           std::hash<key_type>,
+                           std::equal_to<key_type>,
                            detail::rebind_alloc<Allocator, std::pair<const key_type, T>>>;
     using iterator = container_type::iterator;
 
@@ -273,7 +272,7 @@ public:
 protected:
     template<std::ranges::sized_range U>
     auto _insert_len(U&& range) {
-        auto view = std::views::transform(range, [this](auto& el) -> usize {
+        auto view = std::ranges::views::transform(range, [this](auto& el) -> usize {
             return m_items.contains(ItemTrait<T>::key(el)) ? 0 : 1;
         });
         return std::accumulate(view.begin(), view.end(), 0);
@@ -342,13 +341,16 @@ public:
     using key_type       = ItemTrait<T>::key_type;
     using store_type     = ItemTrait<T>::store_type;
     using container_type =
-        std::unordered_map<key_type, T, std::hash<key_type>, std::equal_to<key_type>,
+        std::unordered_map<key_type,
+                           T,
+                           std::hash<key_type>,
+                           std::equal_to<key_type>,
                            detail::rebind_alloc<Allocator, std::pair<const key_type, T>>>;
     using iterator = container_type::iterator;
 
     ListImpl(Allocator allc = Allocator())
         : m_order(allc),
-          m_view(std::views::transform(m_order, Trans { this })),
+          m_view(std::ranges::views::transform(m_order, Trans { this })),
           m_notify_handle(0) {}
 
     ~ListImpl() {
@@ -381,7 +383,7 @@ public:
         if (m_store && *m_store == store) return;
         if (m_store) {
             m_store->store_unreg_notify(m_notify_handle);
-            if (!m_order.empty()) self->removeRows(0, static_cast<int>(m_order.size()));
+            if (! m_order.empty()) self->removeRows(0, static_cast<int>(m_order.size()));
         }
         m_store = store;
 
@@ -401,7 +403,7 @@ public:
 protected:
     template<std::ranges::sized_range U>
     auto _insert_len(U&& range) {
-        auto view = std::views::transform(range, [this](auto& el) -> usize {
+        auto view = std::ranges::views::transform(range, [this](auto& el) -> usize {
             return m_map.contains(ItemTrait<T>::key(el)) ? 0 : 1;
         });
         return std::accumulate(view.begin(), view.end(), 0);

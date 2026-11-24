@@ -1,286 +1,510 @@
 module;
-#include "kstore/qt/meta_list_model.hpp"
+#include "QExtra/macro_qt.hpp"
 
-module qextra:kstore.meta_list_model;
+#ifdef Q_MOC_RUN
+#include "kstore/meta_list_model.moc"
+#endif
+
+export module qextra:kstore.meta_list_model;
+import :kstore.meta_role;
+import :kstore.item_trait;
+import :kstore.list_impl;
 import qextra.qt;
 import rstd.cppstd;
 
-extern "C++" {
-
-namespace kstore
+export namespace kstore
 {
 
-QMetaListModel::QMetaListModel(QListInterface* oper, QObject* parent)
-    : QAbstractListModel(parent),
-      m_oper(oper),
-      m_has_more(false),
-      m_selection_enabled(false) {}
+class QListInterface {
+public:
+    using value_t = void*;
 
-QMetaListModel::~QMetaListModel() {}
-auto QMetaListModel::hasMore() const -> bool { return m_has_more; }
-void QMetaListModel::setHasMore(bool v) {
-    if (m_has_more != v) {
-        m_has_more = v;
-        hasMoreChanged(v);
+    virtual auto rawAt(qint32 index) const -> value_t               = 0;
+    virtual void rawAssign(qint32 index, const QVariant&)           = 0;
+    virtual auto rawToVariant(value_t) const -> QVariant            = 0;
+    virtual void rawInsert(qint32 index, std::span<const QVariant>) = 0;
+    virtual void rawMove(qint32 src, qint32 dst, qint32 count = 1)  = 0;
+    virtual auto rawItemMeta() const -> QMetaObject const*          = 0;
+    virtual auto rawKeyAt(qint32 index) const -> QVariant { return index; }
+    virtual auto rawSize() const -> std::size_t     = 0;
+    virtual void rawErase(qint32 start, qint32 end) = 0;
+};
+
+template<typename TItem,
+         typename IMPL,
+         ListStoreType Store = ListStoreType::Vector,
+         typename Allocator  = std::allocator<detail::allocator_value_type<TItem, Store>>>
+class QMetaListModelCRTP;
+
+class QMetaListModel : public QAbstractListModel, public QMetaRoleNames {
+    Q_OBJECT
+
+    Q_PROPERTY(bool hasMore READ hasMore WRITE setHasMore NOTIFY hasMoreChanged)
+    Q_PROPERTY(bool selectionEnabled READ selectionEnabled WRITE setSelectionEnabled NOTIFY
+                   selectionEnabledChanged)
+    Q_PROPERTY(qint32 selectedCount READ selectedCount NOTIFY selectedCountChanged)
+
+    template<typename TItem, typename IMPL, ListStoreType Store, typename Allocator>
+    friend class QMetaListModelCRTP;
+
+public:
+    static constexpr int SelectedRole = Qt::UserRole;
+
+    QMetaListModel(QListInterface* oper, QObject* parent = nullptr);
+    virtual ~QMetaListModel();
+
+    Q_INVOKABLE QVariant     item(qint32 index) const;
+    Q_INVOKABLE void         setItem(qint32 index, const QVariant&);
+    Q_INVOKABLE QVariantList items(qint32 offset = 0, qint32 n = -1) const;
+    // Q_INVOKABLE bool move(qint32 src, qint32 dst, qint32 count = 1);
+
+    auto hasMore() const -> bool;
+    void setHasMore(bool);
+
+    auto selectionEnabled() const -> bool;
+    void setSelectionEnabled(bool);
+    auto selectedCount() const -> qint32;
+
+    Q_INVOKABLE bool         isSelected(qint32 row) const;
+    Q_INVOKABLE bool         setSelected(qint32 row, bool selected);
+    Q_INVOKABLE bool         toggleSelected(qint32 row);
+    Q_INVOKABLE bool         selectOnly(qint32 row);
+    Q_INVOKABLE bool         selectRange(qint32 from, qint32 to, bool selected = true);
+    Q_INVOKABLE void         clearSelection();
+    Q_INVOKABLE void         setSelectedKeys(const QStringList& keys);
+    Q_INVOKABLE QStringList  selectedKeys() const;
+    Q_INVOKABLE QVariantList selectedRows() const;
+    Q_INVOKABLE QVariantList selectedItems() const;
+
+    bool canFetchMore(const QModelIndex&) const override;
+    void fetchMore(const QModelIndex&) override;
+
+    Q_SIGNAL void hasMoreChanged(bool);
+    Q_SIGNAL void reqFetchMore(qint32);
+    Q_SIGNAL void selectionEnabledChanged();
+    Q_SIGNAL void selectedCountChanged();
+    Q_SIGNAL void selectionChanged();
+
+    int rowCount(const QModelIndex& = QModelIndex()) const override;
+
+    bool insertRows(int row, int count, const QModelIndex& parent = {}) override;
+
+    bool removeRows(int row, int count, const QModelIndex& parent = {}) override;
+
+    bool moveRows(const QModelIndex& sourceParent,
+                  int                sourceRow,
+                  int                count,
+                  const QModelIndex& destinationParent,
+                  int                destinationChild) override;
+    auto roleNames() const -> QHash<int, QByteArray> override;
+
+    Qt::DropActions supportedDropActions() const override;
+    Qt::ItemFlags   flags(const QModelIndex& index) const override;
+
+protected:
+    QListInterface* m_oper;
+    bool            m_has_more;
+    bool            m_selection_enabled;
+    QSet<QString>   m_selected_keys;
+
+    auto selectionKeyAt(qint32 row) const -> QString;
+    void emitSelectionRolesChanged();
+};
+
+template<typename TItem, typename IMPL, ListStoreType Store, typename Allocator>
+class QMetaListModelCRTP : public detail::ListImpl<TItem, Allocator, Store>, public QListInterface {
+public:
+    using list_impl_t    = detail::ListImpl<TItem, Allocator, Store>;
+    using allocator_type = Allocator;
+    template<typename T>
+    using rebind_alloc = detail::rebind_alloc<allocator_type, T>;
+    using value_type   = TItem;
+
+    QMetaListModelCRTP(Allocator allc = Allocator()): list_impl_t(allc) {};
+    QMetaListModelCRTP(const QMetaListModelCRTP&) = delete;
+
+    virtual ~QMetaListModelCRTP() {};
+
+    /// QlistInterface
+    auto rawAt(qint32 index) const -> value_t override {
+        // safe const_cast here
+        // as item in container is not const
+        return const_cast<TItem*>(&(_cimpl().at(index)));
     }
-}
-
-auto QMetaListModel::selectionEnabled() const -> bool { return m_selection_enabled; }
-
-void QMetaListModel::setSelectionEnabled(bool v) {
-    if (m_selection_enabled == v) return;
-
-    layoutAboutToBeChanged();
-    m_selection_enabled = v;
-    if (! m_selection_enabled && ! m_selected_keys.isEmpty()) {
-        m_selected_keys.clear();
-        Q_EMIT selectedCountChanged();
-        Q_EMIT selectionChanged();
+    void rawAssign(qint32 index, const QVariant& val) override {
+        if (val.canConvert<TItem>()) {
+            _cimpl().at(index) = val.value<TItem>();
+        }
     }
-    layoutChanged();
-    Q_EMIT selectionEnabledChanged();
-    emitSelectionRolesChanged();
-}
+    auto rawToVariant(value_t p) const -> QVariant override {
+        if (p == nullptr) return {};
+        auto& v = *(TItem*)p;
+        if constexpr (special_of<value_type, std::variant>) {
+            return std::visit(
+                [](const auto& v) -> QVariant {
+                    return QVariant::fromValue(v);
+                },
+                v);
+        } else {
+            return QVariant::fromValue(v);
+        }
+    }
+    void rawInsert(qint32 offset, std::span<const QVariant> data) override {
+        auto view = std::ranges::views::transform(data, [](const QVariant& v) {
+            return v.value<TItem>();
+        });
+        _cimpl()._insert_impl(offset, view);
+    }
+    void rawMove(qint32 src, qint32 dst, qint32 count = 1) override {
+        _cimpl()._move_impl(src, dst, count);
+    }
+    auto rawItemMeta() const -> QMetaObject const* override {
+        if constexpr (requires { TItem::staticMetaObject; }) {
+            return &TItem::staticMetaObject;
+        } else {
+            return nullptr;
+        }
+    }
+    auto rawKeyAt(qint32 index) const -> QVariant override {
+        if (index < 0 || index >= static_cast<qint32>(_cimpl().size())) return {};
+        if constexpr (requires(const TItem& item) {
+                          typename ItemTrait<TItem>::key_type;
+                          ItemTrait<TItem>::key(item);
+                      }) {
+            auto key = ItemTrait<TItem>::key(_cimpl().at(index));
+            return QVariant::fromValue(key);
+        } else {
+            return index;
+        }
+    }
+    auto rawSize() const -> std::size_t override { return _cimpl().size(); }
+    void rawErase(qint32 start, qint32 end) override { _cimpl()._erase_impl(start, end); }
 
-auto QMetaListModel::selectedCount() const -> qint32 {
-    return static_cast<qint32>(m_selected_keys.size());
-}
-
-auto QMetaListModel::selectionKeyAt(qint32 row) const -> QString {
-    if (row < 0 || row >= rowCount()) return {};
-    return m_oper->rawKeyAt(row).toString();
-}
-
-auto QMetaListModel::isSelected(qint32 row) const -> bool {
-    if (! m_selection_enabled) return false;
-    const auto key = selectionKeyAt(row);
-    return ! key.isEmpty() && m_selected_keys.contains(key);
-}
-
-auto QMetaListModel::setSelected(qint32 row, bool selected) -> bool {
-    if (! m_selection_enabled) return false;
-    const auto key = selectionKeyAt(row);
-    if (key.isEmpty()) return false;
-
-    const bool was_selected = m_selected_keys.contains(key);
-    if (was_selected == selected) return false;
-
-    if (selected)
-        m_selected_keys.insert(key);
-    else
-        m_selected_keys.remove(key);
-
-    const auto idx = index(row);
-    Q_EMIT dataChanged(idx, idx, { SelectedRole });
-    Q_EMIT selectedCountChanged();
-    Q_EMIT selectionChanged();
-    return true;
-}
-
-auto QMetaListModel::toggleSelected(qint32 row) -> bool {
-    return setSelected(row, ! isSelected(row));
-}
-
-auto QMetaListModel::selectOnly(qint32 row) -> bool {
-    if (! m_selection_enabled) return false;
-    const auto key = selectionKeyAt(row);
-    if (key.isEmpty()) return false;
-    if (m_selected_keys.size() == 1 && m_selected_keys.contains(key)) return false;
-
-    m_selected_keys.clear();
-    m_selected_keys.insert(key);
-    emitSelectionRolesChanged();
-    Q_EMIT selectedCountChanged();
-    Q_EMIT selectionChanged();
-    return true;
-}
-
-auto QMetaListModel::selectRange(qint32 from, qint32 to, bool selected) -> bool {
-    if (! m_selection_enabled) return false;
-    const auto rows = rowCount();
-    if (rows <= 0) return false;
-
-    from = std::clamp(from, 0, rows - 1);
-    to   = std::clamp(to, 0, rows - 1);
-    if (from > to) std::swap(from, to);
-
-    bool changed = false;
-    for (auto row = from; row <= to; ++row) {
-        const auto key = selectionKeyAt(row);
-        if (key.isEmpty()) continue;
-        const bool was_selected = m_selected_keys.contains(key);
-        if (was_selected == selected) continue;
-        changed = true;
-        if (selected)
-            m_selected_keys.insert(key);
-        else
-            m_selected_keys.remove(key);
+    template<typename T>
+        requires std::same_as<std::remove_cvref_t<T>, TItem>
+    auto insert(int index, T&& item) {
+        return insert(index, std::array { std::forward<T>(item) });
     }
 
-    if (! changed) return false;
-    Q_EMIT dataChanged(index(from), index(to), { SelectedRole });
-    Q_EMIT selectedCountChanged();
-    Q_EMIT selectionChanged();
-    return true;
-}
-
-void QMetaListModel::clearSelection() {
-    if (m_selected_keys.isEmpty()) return;
-    m_selected_keys.clear();
-    emitSelectionRolesChanged();
-    Q_EMIT selectedCountChanged();
-    Q_EMIT selectionChanged();
-}
-
-void QMetaListModel::setSelectedKeys(const QStringList& keys) {
-    QSet<QString> next;
-    next.reserve(keys.size());
-    for (const auto& key : keys) {
-        if (! key.isEmpty()) next.insert(key);
+    template<typename T>
+        requires std::ranges::sized_range<T>
+    auto insert(int index, T&& range) {
+        auto size = range.size();
+        if (size < 1) return size;
+        size = _cimpl()._insert_len(range);
+        _cimpl().beginInsertRows({}, index, index + size - 1);
+        _cimpl()._insert_impl(index, std::forward<T>(range));
+        _cimpl().endInsertRows();
+        return size;
     }
-    if (next == m_selected_keys) return;
-    m_selected_keys = std::move(next);
-    emitSelectionRolesChanged();
-    Q_EMIT selectedCountChanged();
-    Q_EMIT selectionChanged();
-}
+    void remove(int index, int size = 1) {
+        if (size < 1) return;
+        _cimpl().removeRows(index, size);
+    }
 
-auto QMetaListModel::selectedKeys() const -> QStringList {
-    QStringList out;
-    QSet<QString> seen;
-    out.reserve(m_selected_keys.size());
-    seen.reserve(m_selected_keys.size());
+    template<typename Func>
+    void remove_if(Func&& func) {
+        std::set<int, std::greater<>> indexes;
+        const auto                    n = _cimpl().size();
+        for (int i = 0; i < n; i++) {
+            auto& el = _cimpl().at(i);
+            if (func(el)) {
+                indexes.insert(i);
+            }
+        }
+        for (auto& i : indexes) {
+            this->removeRow(i);
+        }
+    }
+    void replace(int row, param_type<TItem> val) {
+        auto& item = _cimpl().at(row);
+        item       = val;
+        auto idx   = _cimpl().index(row);
+        _cimpl().dataChanged(idx, idx);
+    }
 
-    for (auto row = 0; row < rowCount(); ++row) {
-        const auto key = selectionKeyAt(row);
-        if (! key.isEmpty() && m_selected_keys.contains(key)) {
-            out.append(key);
-            seen.insert(key);
+    void resetModel() {
+        _cimpl().beginResetModel();
+        _cimpl()._reset_impl();
+        _cimpl().endResetModel();
+    }
+
+    template<typename T>
+        requires std::ranges::sized_range<T>
+    void resetModel(const std::optional<T>& items) {
+        _cimpl().beginResetModel();
+        if (items) {
+            _cimpl()._reset_impl(items.value());
+        } else {
+            _cimpl()._reset_impl();
+        }
+        _cimpl().endResetModel();
+    }
+
+    template<typename T>
+        requires std::ranges::sized_range<T>
+    // std::same_as<std::decay_t<typename T::value_type>, TItem>
+    void resetModel(const T& items) {
+        _cimpl().beginResetModel();
+        _cimpl()._reset_impl(items);
+        _cimpl().endResetModel();
+    }
+    template<typename T>
+        requires std::ranges::sized_range<T>
+    void replaceResetModel(const T& items) {
+        const auto  size = items.size();
+        const usize old  = std::max(_cimpl().size(), 0);
+        const auto  num  = std::min<int>(old, size);
+        for (auto i = 0; i < num; i++) {
+            _cimpl().at(i) = items[i];
+        }
+        if (num > 0) _cimpl().dataChanged(_cimpl().index(0), _cimpl().index(num));
+        if (size > old) {
+            insert(num, std::ranges::subrange(items.begin() + num, items.end(), size - num));
+        } else if (size < old) {
+            removeRows(size, old - size);
         }
     }
 
-    for (const auto& key : m_selected_keys) {
-        if (! seen.contains(key)) out.append(key);
+    bool move(int sourceRow, int destinationRow, int count) {
+        auto p = _cimpl().index(-1);
+        return _cimpl().moveRows(p, sourceRow, count, p, destinationRow);
     }
-    return out;
-}
 
-auto QMetaListModel::selectedRows() const -> QVariantList {
-    QVariantList out;
-    for (auto row = 0; row < rowCount(); ++row) {
-        if (isSelected(row)) out.append(row);
+    ///
+    /// @brief sync items without reset
+    /// if mostly changed, use reset
+    template<detail::syncable_list<TItem> U>
+    void sync(U&& items) {
+        using key_type     = ItemTrait<TItem>::key_type;
+        using idx_map_type = detail::HashMap<key_type, usize, allocator_type>;
+        auto self          = &_cimpl();
+
+        auto changed = [self](int row, int count = 1) {
+            if (count < 1) return;
+            auto first = self->index(row);
+            auto last  = count > 1 ? self->index(row + count - 1) : first;
+            self->dataChanged(first, last);
+        };
+
+        if constexpr (Store == ListStoreType::Vector) {
+            // get key to idx map
+            idx_map_type key_to_idx(self->get_allocator());
+            key_to_idx.reserve(items.size());
+            for (decltype(items.size()) i = 0; i < items.size(); ++i) {
+                key_to_idx.insert({ ItemTrait<TItem>::key(items[i]), i });
+            }
+
+            // update existing, collect removals
+            std::vector<usize> to_remove;
+            for (usize i = 0; i < self->size(); i++) {
+                auto key = ItemTrait<TItem>::key(self->at(i));
+                if (auto it = key_to_idx.find(key); it != key_to_idx.end()) {
+                    self->at(i) = std::forward<U>(items)[it->second];
+                    key_to_idx.erase(it);
+                } else {
+                    to_remove.push_back(i);
+                }
+            }
+
+            // batch remove back to front
+            for (auto it = to_remove.rbegin(); it != to_remove.rend();) {
+                usize last  = *it;
+                usize first = last;
+                ++it;
+                while (it != to_remove.rend() && *it == first - 1) {
+                    first = *it;
+                    ++it;
+                }
+                self->remove(first, last - first + 1);
+            }
+
+            if (self->size() > 0) changed(0, self->size());
+        } else if constexpr (Store == ListStoreType::Map || Store == ListStoreType::Share ||
+                             Store == ListStoreType::VectorWithMap) {
+            auto item_size = (usize)items.size();
+
+            // build new key set
+            idx_map_type new_key_to_idx(self->get_allocator());
+            new_key_to_idx.reserve(item_size);
+            for (usize i = 0; i < item_size; i++) {
+                new_key_to_idx.insert({ ItemTrait<TItem>::key(items[i]), i });
+            }
+
+            // build old key set (before any modifications)
+            idx_map_type old_key_to_idx(self->get_allocator());
+            for (usize i = 0; i < (usize)self->size(); i++) {
+                old_key_to_idx.insert({ self->key_at(i), i });
+            }
+            {
+                std::vector<usize> to_remove;
+                for (usize i = 0; i < (usize)self->size(); i++) {
+                    if (! new_key_to_idx.contains(self->key_at(i))) {
+                        to_remove.push_back(i);
+                    }
+                }
+                for (auto it = to_remove.rbegin(); it != to_remove.rend();) {
+                    usize last  = *it;
+                    usize first = last;
+                    ++it;
+                    while (it != to_remove.rend() && *it == first - 1) {
+                        first = *it;
+                        ++it;
+                    }
+                    self->remove(first, last - first + 1);
+                }
+            }
+            {
+                using key_vec = std::vector<key_type, rebind_alloc<key_type>>;
+                key_vec target_order(self->get_allocator());
+                target_order.reserve(self->size());
+                for (usize i = 0; i < item_size; i++) {
+                    auto key = ItemTrait<TItem>::key(items[i]);
+                    if (old_key_to_idx.contains(key)) {
+                        target_order.push_back(key);
+                    }
+                }
+
+                bool needs_reorder = false;
+                for (usize i = 0; i < target_order.size(); i++) {
+                    if (target_order[i] != self->key_at(i)) {
+                        needs_reorder = true;
+                        break;
+                    }
+                }
+
+                if (needs_reorder) {
+                    // build key -> new position BEFORE reorder
+                    idx_map_type key_to_new_pos(self->get_allocator());
+                    for (usize i = 0; i < target_order.size(); i++) {
+                        key_to_new_pos[target_order[i]] = i;
+                    }
+
+                    self->layoutAboutToBeChanged();
+                    auto old_persistent = self->persistentIndexList();
+
+                    // compute new persistent indexes (key_at still old order)
+                    QModelIndexList new_persistent;
+                    new_persistent.reserve(old_persistent.size());
+                    for (auto& idx : old_persistent) {
+                        if (idx.isValid() && idx.row() >= 0 && idx.row() < (int)self->size()) {
+                            auto key = self->key_at(idx.row());
+                            if (auto it = key_to_new_pos.find(key); it != key_to_new_pos.end()) {
+                                new_persistent.append(self->index(it->second));
+                            } else {
+                                new_persistent.append(QModelIndex());
+                            }
+                        } else {
+                            new_persistent.append(QModelIndex());
+                        }
+                    }
+
+                    self->_reorder_impl(target_order);
+                    self->changePersistentIndexList(old_persistent, new_persistent);
+                    self->layoutChanged();
+                }
+            }
+            {
+                for (usize i = 0; i < (usize)self->size(); i++) {
+                    auto key = self->key_at(i);
+                    if (auto it = new_key_to_idx.find(key); it != new_key_to_idx.end()) {
+                        self->at(i) = std::forward<U>(items)[it->second];
+                    }
+                }
+                if (self->size() > 0) changed(0, self->size());
+            }
+            {
+                usize i   = 0;
+                usize pos = 0;
+
+                while (i < item_size) {
+                    auto key = ItemTrait<TItem>::key(items[i]);
+                    if (old_key_to_idx.contains(key)) {
+                        pos++;
+                        i++;
+                    } else {
+                        usize batch_start = i;
+                        while (i < item_size &&
+                               ! old_key_to_idx.contains(ItemTrait<TItem>::key(items[i]))) {
+                            i++;
+                        }
+                        std::vector<TItem> batch;
+                        batch.reserve(i - batch_start);
+                        for (usize j = batch_start; j < i; j++) {
+                            batch.push_back(std::forward<U>(items)[j]);
+                        }
+                        auto inserted = self->insert(pos, std::move(batch));
+                        pos += inserted;
+                    }
+                }
+            }
+        }
     }
-    return out;
-}
 
-auto QMetaListModel::selectedItems() const -> QVariantList {
-    QVariantList out;
-    for (auto row = 0; row < rowCount(); ++row) {
-        if (isSelected(row)) out.append(item(row));
+    ///
+    /// @brief sync items without reset
+    /// if mostly changed, use reset
+    /// @return increased size
+    template<detail::syncable_list<TItem> U>
+    auto extend(U&& items) -> usize {
+        using key_type     = ItemTrait<TItem>::key_type;
+        using idx_set_type = detail::Set<usize, allocator_type>;
+        using idx_map_type = detail::HashMap<key_type, usize, allocator_type>;
+        auto self          = &_cimpl();
+
+        // get key to idx map
+        idx_map_type key_to_idx(self->get_allocator());
+        key_to_idx.reserve(items.size());
+        for (decltype(items.size()) i = 0; i < items.size(); ++i) {
+            key_to_idx.insert({ ItemTrait<TItem>::key(items[i]), i });
+        }
+        auto changed = [self](int row) {
+            auto idx = self->index(row);
+            self->dataChanged(idx, idx);
+        };
+
+        // update
+        if constexpr (Store == ListStoreType::Vector) {
+            for (usize i = 0; i < self->size(); ++i) {
+                auto key = ItemTrait<TItem>::key(self->at(i));
+                if (auto it = key_to_idx.find(key); it != key_to_idx.end()) {
+                    self->at(i) = std::forward<U>(items)[it->second];
+                    changed(i);
+                    key_to_idx.erase(it);
+                }
+            }
+        } else if constexpr (Store == ListStoreType::VectorWithMap) {
+            for (auto& el : self->_maps()) {
+                if (auto it = key_to_idx.find(el.first); it != key_to_idx.end()) {
+                    self->at(el.second) = std::forward<U>(items)[it->second];
+                    changed(el.second);
+                    key_to_idx.erase(it);
+                }
+            }
+        } else if constexpr (Store == ListStoreType::Map || Store == ListStoreType::Share) {
+            for (usize i = 0; i < self->size(); ++i) {
+                auto h = self->key_at(i);
+                if (auto it = key_to_idx.find(h); it != key_to_idx.end()) {
+                    self->at(i) = std::forward<U>(items)[it->second];
+                    changed(i);
+                    key_to_idx.erase(it);
+                }
+            }
+        }
+
+        // append new
+        idx_set_type ids(self->get_allocator());
+        for (auto& el : key_to_idx) {
+            ids.insert(el.second);
+        }
+        for (auto id : ids) {
+            self->insert(self->size(), std::forward<U>(items)[id]);
+        }
+        return ids.size();
     }
-    return out;
-}
 
-void QMetaListModel::emitSelectionRolesChanged() {
-    const auto rows = rowCount();
-    if (rows <= 0) return;
-    Q_EMIT dataChanged(index(0), index(rows - 1), { SelectedRole });
-}
-
-bool QMetaListModel::canFetchMore(const QModelIndex&) const { return m_has_more; }
-void QMetaListModel::fetchMore(const QModelIndex&) {
-    setHasMore(false);
-    reqFetchMore(rowCount());
-}
-
-int QMetaListModel::rowCount(const QModelIndex& parent) const {
-    if (parent.isValid()) return 0;
-    return m_oper->rawSize();
-}
-
-QVariant QMetaListModel::item(qint32 idx) const {
-    if (idx < 0 || idx >= rowCount()) return {};
-    return m_oper->rawToVariant(m_oper->rawAt(idx));
-}
-void QMetaListModel::setItem(qint32 idx, const QVariant& data) {
-    if (idx < 0 || idx >= rowCount()) return;
-    m_oper->rawAssign(idx, data);
-
-    const auto index = this->index(idx);
-    dataChanged(index, index);
-}
-
-auto QMetaListModel::items(qint32 offset, qint32 n) const -> QVariantList {
-    if (n == -1) n = rowCount();
-
-    QVariantList list;
-    for (auto i = offset; i < n; i++) {
-        list.emplace_back(item(i));
-    }
-    return list;
-}
-
-bool QMetaListModel::insertRows(int row, int count, const QModelIndex& parent) {
-    const auto cur_count = rowCount(parent);
-    if (row < 0) {
-        row = cur_count + (1 + row);
-    }
-    if (count < 1 || row < 0 || row > cur_count) return false;
-    beginInsertRows(QModelIndex(), row, row + count - 1);
-    m_oper->rawInsert(row, QVariantList(count));
-    endInsertRows();
-    return true;
-}
-
-auto QMetaListModel::removeRows(int row, int count, const QModelIndex& parent) -> bool {
-    if (count <= 0 || row < 0 || (row + count) > rowCount(parent)) return false;
-
-    beginRemoveRows(parent, row, row + count - 1);
-    m_oper->rawErase(row, row + count);
-    endRemoveRows();
-    return true;
-}
-
-bool QMetaListModel::moveRows(const QModelIndex& sourceParent, int sourceRow, int count,
-                              const QModelIndex& destinationParent, int destinationChild) {
-#if 0
-    if (sourceRow < 0 || sourceRow + count - 1 >= rowCount(sourceParent) || destinationChild < 0 ||
-        destinationChild > rowCount(destinationParent) || sourceRow == destinationChild - 1 ||
-        count <= 0 || sourceParent.isValid() || destinationParent.isValid()) {
-        return false;
-    }
-#else
-    if (sourceRow < 0 || sourceRow + count - 1 >= rowCount(sourceParent) || destinationChild < 0 ||
-        destinationChild > rowCount(destinationParent) || sourceRow == destinationChild ||
-        sourceRow == destinationChild - 1 || count <= 0 || sourceParent.isValid() ||
-        destinationParent.isValid()) {
-        return false;
-    }
-#endif
-
-    if (! beginMoveRows(
-            QModelIndex(), sourceRow, sourceRow + count - 1, QModelIndex(), destinationChild))
-        return false;
-
-    m_oper->rawMove(sourceRow, destinationChild, count);
-    endMoveRows();
-    return true;
-}
-Qt::DropActions QMetaListModel::supportedDropActions() const {
-    return QAbstractItemModel::supportedDropActions() | Qt::MoveAction;
-}
-
-Qt::ItemFlags QMetaListModel::flags(const QModelIndex& index) const {
-    if (! index.isValid()) return QAbstractListModel::flags(index) | Qt::ItemIsDropEnabled;
-    return QAbstractListModel::flags(index) | Qt::ItemIsEditable | Qt::ItemIsDragEnabled |
-           Qt::ItemIsDropEnabled;
-}
-
-auto QMetaListModel::roleNames() const -> QHash<int, QByteArray> {
-    auto out = this->roleNamesRef();
-    if (m_selection_enabled) out.insert(SelectedRole, "selected");
-    return out;
-}
-
+private:
+    auto&       _cimpl() noexcept { return *static_cast<IMPL*>(this); }
+    const auto& _cimpl() const noexcept { return *static_cast<const IMPL*>(this); }
+};
 } // namespace kstore
-}
